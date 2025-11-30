@@ -253,7 +253,7 @@ bool AnimationImpl::update(float deltaTimeMs) {
         for (const auto& prop : m_properties) {
             float distance = std::abs(prop.currentValue - prop.toValue);
             float velocity = std::abs(m_springVelocities[prop.property]);
-            if (distance > m_springConfig.restThreshold || velocity > m_springConfig.restThreshold) {
+            if (distance > m_springConfig.restThreshold || velocity > m_springConfig.velocityThreshold) {
                 atRest = false;
                 break;
             }
@@ -333,31 +333,69 @@ void AnimationImpl::updateTween(float progress) {
 void AnimationImpl::updateSpring(float deltaTimeMs) {
     // Convert to seconds for physics calculations
     float dt = deltaTimeMs / 1000.0f;
+    
+    // Clamp dt to prevent instability with large time steps
+    dt = std::min(dt, 0.064f);  // Max ~64ms (about 15 FPS minimum)
 
-    for (auto& prop : m_properties) {
-        float& velocity = m_springVelocities[prop.property];
-        float displacement = prop.currentValue - prop.toValue;
+    // Use sub-stepping for better stability with large time steps
+    const float maxSubStep = 0.016f;  // 16ms max per sub-step
+    int subSteps = static_cast<int>(std::ceil(dt / maxSubStep));
+    float subDt = dt / static_cast<float>(subSteps);
 
-        // Spring force: F = -kx - cv
-        // Where k = stiffness, x = displacement, c = damping, v = velocity
-        float springForce = -m_springConfig.stiffness * displacement;
-        float dampingForce = -m_springConfig.damping * velocity;
-        float acceleration = (springForce + dampingForce) / m_springConfig.mass;
-
-        // Update velocity and position using semi-implicit Euler
-        velocity += acceleration * dt;
-        prop.currentValue += velocity * dt;
+    for (int step = 0; step < subSteps; ++step) {
+        for (auto& prop : m_properties) {
+            float& velocity = m_springVelocities[prop.property];
+            
+            // Use RK4 (Runge-Kutta 4th order) integration for better accuracy
+            // This provides much better stability than Euler integration
+            
+            auto computeAcceleration = [this](float position, float vel) {
+                float displacement = position - 0.0f;  // Target is at 0 in relative space
+                float springForce = -m_springConfig.stiffness * displacement;
+                float dampingForce = -m_springConfig.damping * vel;
+                return (springForce + dampingForce) / m_springConfig.mass;
+            };
+            
+            // Work in relative space (target = 0)
+            float relativePos = prop.currentValue - prop.toValue;
+            
+            // RK4 integration
+            // k1
+            float k1_v = computeAcceleration(relativePos, velocity);
+            float k1_x = velocity;
+            
+            // k2
+            float k2_v = computeAcceleration(relativePos + k1_x * subDt * 0.5f, velocity + k1_v * subDt * 0.5f);
+            float k2_x = velocity + k1_v * subDt * 0.5f;
+            
+            // k3
+            float k3_v = computeAcceleration(relativePos + k2_x * subDt * 0.5f, velocity + k2_v * subDt * 0.5f);
+            float k3_x = velocity + k2_v * subDt * 0.5f;
+            
+            // k4
+            float k4_v = computeAcceleration(relativePos + k3_x * subDt, velocity + k3_v * subDt);
+            float k4_x = velocity + k3_v * subDt;
+            
+            // Update velocity and position
+            velocity += (k1_v + 2.0f * k2_v + 2.0f * k3_v + k4_v) * subDt / 6.0f;
+            relativePos += (k1_x + 2.0f * k2_x + 2.0f * k3_x + k4_x) * subDt / 6.0f;
+            
+            // Convert back to absolute position
+            prop.currentValue = relativePos + prop.toValue;
+        }
     }
 
     // Calculate approximate progress based on distance to target
     if (!m_properties.empty()) {
         float totalDistance = 0.0f;
-        float currentDistance = 0.0f;
+        float remainingDistance = 0.0f;
         for (const auto& prop : m_properties) {
-            totalDistance += std::abs(prop.toValue - prop.fromValue);
-            currentDistance += std::abs(prop.currentValue - prop.fromValue);
+            float range = std::abs(prop.toValue - prop.fromValue);
+            totalDistance += range;
+            remainingDistance += std::abs(prop.currentValue - prop.toValue);
         }
-        m_progress = totalDistance > 0.0f ? clamp(currentDistance / totalDistance, 0.0f, 1.0f) : 1.0f;
+        // Progress is how close we are to the target (1.0 = at target)
+        m_progress = totalDistance > 0.0f ? clamp(1.0f - (remainingDistance / totalDistance), 0.0f, 1.0f) : 1.0f;
     }
 }
 
@@ -520,6 +558,36 @@ Animation& Animation::springMass(float mass) {
 
 Animation& Animation::springVelocity(float velocity) {
     m_impl->springConfig.velocity = velocity;
+    return *this;
+}
+
+Animation& Animation::springConfig(const SpringConfig& config) {
+    m_impl->useSpring = true;
+    m_impl->springConfig = config;
+    return *this;
+}
+
+Animation& Animation::springGentle() {
+    m_impl->useSpring = true;
+    m_impl->springConfig = SpringConfig::gentle();
+    return *this;
+}
+
+Animation& Animation::springWobbly() {
+    m_impl->useSpring = true;
+    m_impl->springConfig = SpringConfig::wobbly();
+    return *this;
+}
+
+Animation& Animation::springStiff() {
+    m_impl->useSpring = true;
+    m_impl->springConfig = SpringConfig::stiff();
+    return *this;
+}
+
+Animation& Animation::springSlow() {
+    m_impl->useSpring = true;
+    m_impl->springConfig = SpringConfig::slow();
     return *this;
 }
 
@@ -748,12 +816,12 @@ float AnimationTimeline::getTotalDuration() const {
 AnimationGroup::AnimationGroup(GroupMode mode) : m_mode(mode) {}
 
 AnimationGroup& AnimationGroup::add(AnimationHandle animation) {
-    m_entries.push_back({animation, 0.0f, 0.0f, false});
+    m_entries.push_back({animation, 0.0f, 0.0f, false, false});
     return *this;
 }
 
 AnimationGroup& AnimationGroup::addWithDelay(AnimationHandle animation, float delay) {
-    m_entries.push_back({animation, delay, 0.0f, false});
+    m_entries.push_back({animation, delay, 0.0f, false, false});
     return *this;
 }
 
@@ -764,11 +832,13 @@ AnimationGroup& AnimationGroup::stagger(float delayBetween) {
 
 void AnimationGroup::play() {
     m_playing = true;
+    m_completed = false;
     m_currentIndex = 0;
 
     // Reset all entries
     for (auto& entry : m_entries) {
         entry.started = false;
+        entry.completed = false;
         entry.elapsedDelay = 0.0f;
         entry.animation->reset();
     }
@@ -804,6 +874,7 @@ void AnimationGroup::pause() {
 
 void AnimationGroup::stop() {
     m_playing = false;
+    m_completed = true;
 
     for (auto& entry : m_entries) {
         entry.animation->stop();
@@ -816,10 +887,12 @@ void AnimationGroup::stop() {
 
 void AnimationGroup::reset() {
     m_playing = false;
+    m_completed = false;
     m_currentIndex = 0;
 
     for (auto& entry : m_entries) {
         entry.started = false;
+        entry.completed = false;
         entry.elapsedDelay = 0.0f;
         entry.animation->reset();
     }
@@ -847,12 +920,22 @@ bool AnimationGroup::update(float deltaTimeMs) {
             if (!entry.started) {
                 entry.started = true;
                 entry.animation->start();
+                if (m_onAnimationStart) {
+                    m_onAnimationStart(m_currentIndex);
+                }
             }
 
             // Update current animation
             if (entry.animation->update(deltaTimeMs)) {
                 anyRunning = true;
             } else {
+                // Animation completed
+                if (!entry.completed) {
+                    entry.completed = true;
+                    if (m_onAnimationComplete) {
+                        m_onAnimationComplete(m_currentIndex);
+                    }
+                }
                 // Move to next animation
                 m_currentIndex++;
                 if (m_currentIndex < m_entries.size()) {
@@ -862,7 +945,9 @@ bool AnimationGroup::update(float deltaTimeMs) {
         }
     } else {
         // Parallel mode - update all animations
-        for (auto& entry : m_entries) {
+        for (size_t i = 0; i < m_entries.size(); ++i) {
+            auto& entry = m_entries[i];
+            
             // Handle delay
             if (entry.elapsedDelay < entry.delay) {
                 entry.elapsedDelay += deltaTimeMs;
@@ -874,17 +959,26 @@ bool AnimationGroup::update(float deltaTimeMs) {
             if (!entry.started) {
                 entry.started = true;
                 entry.animation->start();
+                if (m_onAnimationStart) {
+                    m_onAnimationStart(i);
+                }
             }
 
             // Update animation
             if (entry.animation->update(deltaTimeMs)) {
                 anyRunning = true;
+            } else if (!entry.completed) {
+                entry.completed = true;
+                if (m_onAnimationComplete) {
+                    m_onAnimationComplete(i);
+                }
             }
         }
     }
 
     if (!anyRunning) {
         m_playing = false;
+        m_completed = true;
         if (m_onComplete) {
             m_onComplete();
         }
@@ -893,9 +987,191 @@ bool AnimationGroup::update(float deltaTimeMs) {
     return anyRunning;
 }
 
+float AnimationGroup::getTotalDuration() const {
+    if (m_entries.empty()) {
+        return 0.0f;
+    }
+
+    if (m_mode == GroupMode::Sequence) {
+        // Sum of all durations plus delays
+        float total = 0.0f;
+        for (size_t i = 0; i < m_entries.size(); ++i) {
+            const auto& entry = m_entries[i];
+            total += entry.delay + entry.animation->getDuration() + entry.animation->getDelay();
+            if (m_staggerDelay > 0.0f && i > 0) {
+                total += m_staggerDelay;
+            }
+        }
+        return total;
+    } else {
+        // Max of all (delay + duration)
+        float maxEnd = 0.0f;
+        for (size_t i = 0; i < m_entries.size(); ++i) {
+            const auto& entry = m_entries[i];
+            float staggerOffset = m_staggerDelay > 0.0f ? i * m_staggerDelay : 0.0f;
+            float endTime = entry.delay + staggerOffset + entry.animation->getDuration() + entry.animation->getDelay();
+            maxEnd = std::max(maxEnd, endTime);
+        }
+        return maxEnd;
+    }
+}
+
 AnimationGroup& AnimationGroup::onComplete(std::function<void()> callback) {
     m_onComplete = std::move(callback);
     return *this;
+}
+
+AnimationGroup& AnimationGroup::onAnimationStart(std::function<void(size_t index)> callback) {
+    m_onAnimationStart = std::move(callback);
+    return *this;
+}
+
+AnimationGroup& AnimationGroup::onAnimationComplete(std::function<void(size_t index)> callback) {
+    m_onAnimationComplete = std::move(callback);
+    return *this;
+}
+
+// ============================================================================
+// AnimationSequence Implementation
+// ============================================================================
+
+AnimationSequence::AnimationSequence() = default;
+
+AnimationSequence AnimationSequence::create() {
+    return AnimationSequence();
+}
+
+AnimationSequence& AnimationSequence::then(AnimationHandle animation) {
+    m_entries.push_back({animation, 0.0f, false});
+    return *this;
+}
+
+AnimationSequence& AnimationSequence::thenAfter(AnimationHandle animation, float delayMs) {
+    m_entries.push_back({animation, delayMs, false});
+    return *this;
+}
+
+AnimationSequence& AnimationSequence::with(AnimationHandle animation) {
+    m_entries.push_back({animation, 0.0f, true});
+    return *this;
+}
+
+AnimationSequence& AnimationSequence::withDelay(AnimationHandle animation, float delayMs) {
+    m_entries.push_back({animation, delayMs, true});
+    return *this;
+}
+
+AnimationSequence& AnimationSequence::stagger(float delayMs) {
+    m_staggerDelay = delayMs;
+    return *this;
+}
+
+AnimationSequence& AnimationSequence::onComplete(std::function<void()> callback) {
+    m_onComplete = std::move(callback);
+    return *this;
+}
+
+std::shared_ptr<AnimationGroup> AnimationSequence::build() {
+    // Build a timeline-based group that handles both sequential and parallel animations
+    auto timeline = std::make_shared<AnimationTimeline>();
+    
+    float currentTime = 0.0f;
+    float staggerIndex = 0.0f;
+    
+    for (const auto& entry : m_entries) {
+        float startTime = currentTime;
+        
+        if (entry.parallel) {
+            // Parallel animations start at the same time as the previous sequential animation
+            // but we need to track the previous sequential start time
+            // For simplicity, parallel animations start at current time with their delay
+            startTime = currentTime + entry.delay;
+        } else {
+            // Sequential animation - add stagger delay if applicable
+            if (m_staggerDelay > 0.0f && staggerIndex > 0.0f) {
+                startTime += staggerIndex * m_staggerDelay;
+            }
+            startTime += entry.delay;
+        }
+        
+        timeline->add(entry.animation, startTime);
+        
+        if (!entry.parallel) {
+            // Update current time for next sequential animation
+            currentTime = startTime + entry.animation->getDuration() + entry.animation->getDelay();
+            staggerIndex += 1.0f;
+        }
+    }
+    
+    if (m_onComplete) {
+        timeline->onComplete(m_onComplete);
+    }
+    
+    // Wrap timeline in a group for consistent interface
+    // Since AnimationTimeline has similar interface, we create a simple wrapper group
+    auto group = std::make_shared<AnimationGroup>(GroupMode::Parallel);
+    
+    // For now, we'll use a simpler approach - just add all animations to the group
+    // with calculated delays based on the sequence logic
+    currentTime = 0.0f;
+    staggerIndex = 0.0f;
+    
+    for (const auto& entry : m_entries) {
+        float startTime = 0.0f;
+        
+        if (entry.parallel) {
+            startTime = currentTime + entry.delay;
+        } else {
+            if (m_staggerDelay > 0.0f && staggerIndex > 0.0f) {
+                startTime = currentTime + staggerIndex * m_staggerDelay;
+            } else {
+                startTime = currentTime;
+            }
+            startTime += entry.delay;
+        }
+        
+        group->addWithDelay(entry.animation, startTime);
+        
+        if (!entry.parallel) {
+            currentTime = startTime + entry.animation->getDuration() + entry.animation->getDelay();
+            staggerIndex += 1.0f;
+        }
+    }
+    
+    if (m_onComplete) {
+        group->onComplete(m_onComplete);
+    }
+    
+    return group;
+}
+
+// ============================================================================
+// Helper Functions for Animation Chaining
+// ============================================================================
+
+std::shared_ptr<AnimationGroup> sequence(std::initializer_list<AnimationHandle> animations) {
+    auto group = std::make_shared<AnimationGroup>(GroupMode::Sequence);
+    for (const auto& anim : animations) {
+        group->add(anim);
+    }
+    return group;
+}
+
+std::shared_ptr<AnimationGroup> parallel(std::initializer_list<AnimationHandle> animations) {
+    auto group = std::make_shared<AnimationGroup>(GroupMode::Parallel);
+    for (const auto& anim : animations) {
+        group->add(anim);
+    }
+    return group;
+}
+
+std::shared_ptr<AnimationGroup> staggered(std::initializer_list<AnimationHandle> animations, float delayBetween) {
+    auto group = std::make_shared<AnimationGroup>(GroupMode::Parallel);
+    group->stagger(delayBetween);
+    for (const auto& anim : animations) {
+        group->add(anim);
+    }
+    return group;
 }
 
 // ============================================================================
@@ -1553,5 +1829,295 @@ void TweenAnimatorImpl::applyCurrentValues() {
     }
 }
 
+// ============================================================================
+// SpringAnimator Builder Implementation
+// ============================================================================
+
+struct SpringAnimator::Impl {
+    Widget* widget = nullptr;
+    std::vector<PropertyAnimation> properties;
+    SpringConfig springConfig;
+    std::function<void()> onStartCallback;
+    std::function<void()> onCompleteCallback;
+    std::function<void(float)> onUpdateCallback;
+};
+
+SpringAnimator::SpringAnimator(Widget* widget) : m_impl(std::make_shared<Impl>()) {
+    m_impl->widget = widget;
+}
+
+SpringAnimator SpringAnimator::create(Widget* widget) {
+    return SpringAnimator(widget);
+}
+
+SpringAnimator& SpringAnimator::property(Property prop, float from, float to) {
+    m_impl->properties.emplace_back(prop, from, to);
+    return *this;
+}
+
+SpringAnimator& SpringAnimator::propertyTo(Property prop, float to) {
+    if (m_impl->widget) {
+        float from = getWidgetPropertyValue(*m_impl->widget, prop);
+        m_impl->properties.emplace_back(prop, from, to);
+    }
+    return *this;
+}
+
+SpringAnimator& SpringAnimator::stiffness(float value) {
+    m_impl->springConfig.stiffness = value;
+    return *this;
+}
+
+SpringAnimator& SpringAnimator::damping(float value) {
+    m_impl->springConfig.damping = value;
+    return *this;
+}
+
+SpringAnimator& SpringAnimator::mass(float value) {
+    m_impl->springConfig.mass = value;
+    return *this;
+}
+
+SpringAnimator& SpringAnimator::velocity(float value) {
+    m_impl->springConfig.velocity = value;
+    return *this;
+}
+
+SpringAnimator& SpringAnimator::config(const SpringConfig& config) {
+    m_impl->springConfig = config;
+    return *this;
+}
+
+SpringAnimator& SpringAnimator::gentle() {
+    m_impl->springConfig = SpringConfig::gentle();
+    return *this;
+}
+
+SpringAnimator& SpringAnimator::wobbly() {
+    m_impl->springConfig = SpringConfig::wobbly();
+    return *this;
+}
+
+SpringAnimator& SpringAnimator::stiff() {
+    m_impl->springConfig = SpringConfig::stiff();
+    return *this;
+}
+
+SpringAnimator& SpringAnimator::slow() {
+    m_impl->springConfig = SpringConfig::slow();
+    return *this;
+}
+
+SpringAnimator& SpringAnimator::onStart(std::function<void()> callback) {
+    m_impl->onStartCallback = std::move(callback);
+    return *this;
+}
+
+SpringAnimator& SpringAnimator::onComplete(std::function<void()> callback) {
+    m_impl->onCompleteCallback = std::move(callback);
+    return *this;
+}
+
+SpringAnimator& SpringAnimator::onUpdate(std::function<void(float)> callback) {
+    m_impl->onUpdateCallback = std::move(callback);
+    return *this;
+}
+
+std::shared_ptr<SpringAnimatorImpl> SpringAnimator::build() {
+    auto animator = std::make_shared<SpringAnimatorImpl>(m_impl->widget);
+
+    animator->setSpringConfig(m_impl->springConfig);
+
+    for (const auto& prop : m_impl->properties) {
+        animator->addProperty(prop.property, prop.fromValue, prop.toValue);
+    }
+
+    if (m_impl->onStartCallback) {
+        animator->setOnStart(m_impl->onStartCallback);
+    }
+    if (m_impl->onCompleteCallback) {
+        animator->setOnComplete(m_impl->onCompleteCallback);
+    }
+    if (m_impl->onUpdateCallback) {
+        animator->setOnUpdate(m_impl->onUpdateCallback);
+    }
+
+    return animator;
+}
+
+// ============================================================================
+// SpringAnimatorImpl Implementation
+// ============================================================================
+
+SpringAnimatorImpl::SpringAnimatorImpl(Widget* widget) : m_widget(widget) {}
+
+void SpringAnimatorImpl::addProperty(Property prop, float from, float to) {
+    m_properties.emplace_back(prop, from, to);
+}
+
+void SpringAnimatorImpl::start() {
+    if (m_state == AnimationState::Running) return;
+
+    m_state = AnimationState::Running;
+    m_progress = 0.0f;
+
+    // Initialize velocities and current values
+    m_velocities.clear();
+    for (auto& prop : m_properties) {
+        m_velocities[prop.property] = m_springConfig.velocity;
+        prop.currentValue = prop.fromValue;
+    }
+
+    applyCurrentValues();
+
+    if (m_onStart) {
+        m_onStart();
+    }
+}
+
+void SpringAnimatorImpl::pause() {
+    if (m_state == AnimationState::Running) {
+        m_state = AnimationState::Paused;
+    }
+}
+
+void SpringAnimatorImpl::resume() {
+    if (m_state == AnimationState::Paused) {
+        m_state = AnimationState::Running;
+    }
+}
+
+void SpringAnimatorImpl::stop() {
+    m_state = AnimationState::Completed;
+    if (m_onComplete) {
+        m_onComplete();
+    }
+}
+
+void SpringAnimatorImpl::reset() {
+    m_state = AnimationState::Idle;
+    m_progress = 0.0f;
+
+    m_velocities.clear();
+    for (auto& prop : m_properties) {
+        prop.currentValue = prop.fromValue;
+    }
+
+    applyCurrentValues();
+}
+
+bool SpringAnimatorImpl::update(float deltaTimeMs) {
+    if (m_state != AnimationState::Running) {
+        return m_state != AnimationState::Completed;
+    }
+
+    // Convert to seconds
+    float dt = deltaTimeMs / 1000.0f;
+    dt = std::min(dt, 0.064f);  // Clamp for stability
+
+    // Sub-stepping for stability
+    const float maxSubStep = 0.016f;
+    int subSteps = static_cast<int>(std::ceil(dt / maxSubStep));
+    float subDt = dt / static_cast<float>(subSteps);
+
+    for (int step = 0; step < subSteps; ++step) {
+        for (auto& prop : m_properties) {
+            float& velocity = m_velocities[prop.property];
+
+            // RK4 integration
+            auto computeAcceleration = [this](float position, float vel) {
+                float springForce = -m_springConfig.stiffness * position;
+                float dampingForce = -m_springConfig.damping * vel;
+                return (springForce + dampingForce) / m_springConfig.mass;
+            };
+
+            float relativePos = prop.currentValue - prop.toValue;
+
+            // k1
+            float k1_v = computeAcceleration(relativePos, velocity);
+            float k1_x = velocity;
+
+            // k2
+            float k2_v = computeAcceleration(relativePos + k1_x * subDt * 0.5f, velocity + k1_v * subDt * 0.5f);
+            float k2_x = velocity + k1_v * subDt * 0.5f;
+
+            // k3
+            float k3_v = computeAcceleration(relativePos + k2_x * subDt * 0.5f, velocity + k2_v * subDt * 0.5f);
+            float k3_x = velocity + k2_v * subDt * 0.5f;
+
+            // k4
+            float k4_v = computeAcceleration(relativePos + k3_x * subDt, velocity + k3_v * subDt);
+            float k4_x = velocity + k3_v * subDt;
+
+            // Update
+            velocity += (k1_v + 2.0f * k2_v + 2.0f * k3_v + k4_v) * subDt / 6.0f;
+            relativePos += (k1_x + 2.0f * k2_x + 2.0f * k3_x + k4_x) * subDt / 6.0f;
+
+            prop.currentValue = relativePos + prop.toValue;
+        }
+    }
+
+    // Check if at rest
+    bool atRest = true;
+    for (const auto& prop : m_properties) {
+        float distance = std::abs(prop.currentValue - prop.toValue);
+        float velocity = std::abs(m_velocities[prop.property]);
+        if (distance > m_springConfig.restThreshold || velocity > m_springConfig.velocityThreshold) {
+            atRest = false;
+            break;
+        }
+    }
+
+    // Calculate progress
+    if (!m_properties.empty()) {
+        float totalDistance = 0.0f;
+        float remainingDistance = 0.0f;
+        for (const auto& prop : m_properties) {
+            float range = std::abs(prop.toValue - prop.fromValue);
+            totalDistance += range;
+            remainingDistance += std::abs(prop.currentValue - prop.toValue);
+        }
+        m_progress = totalDistance > 0.0f ? clamp(1.0f - (remainingDistance / totalDistance), 0.0f, 1.0f) : 1.0f;
+    }
+
+    applyCurrentValues();
+
+    if (atRest) {
+        // Snap to final values
+        for (auto& prop : m_properties) {
+            prop.currentValue = prop.toValue;
+        }
+        applyCurrentValues();
+        m_progress = 1.0f;
+        stop();
+        return false;
+    }
+
+    if (m_onUpdate) {
+        m_onUpdate(m_progress);
+    }
+
+    return true;
+}
+
+bool SpringAnimatorImpl::isRunning() const {
+    return m_state == AnimationState::Running;
+}
+
+bool SpringAnimatorImpl::isCompleted() const {
+    return m_state == AnimationState::Completed;
+}
+
+float SpringAnimatorImpl::getProgress() const {
+    return m_progress;
+}
+
+void SpringAnimatorImpl::applyCurrentValues() {
+    if (!m_widget) return;
+
+    for (const auto& prop : m_properties) {
+        setWidgetPropertyValue(*m_widget, prop.property, prop.currentValue);
+    }
+}
 
 } // namespace KillerGK

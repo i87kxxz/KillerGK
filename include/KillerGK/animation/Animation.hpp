@@ -11,6 +11,7 @@
 #include <memory>
 #include <vector>
 #include <chrono>
+#include <cmath>
 
 namespace KillerGK {
 
@@ -81,17 +82,120 @@ struct Keyframe {
 /**
  * @struct SpringConfig
  * @brief Configuration for spring-based animations
+ * 
+ * Spring physics simulation using the damped harmonic oscillator equation:
+ * F = -kx - cv
+ * Where:
+ *   k = stiffness (spring constant)
+ *   x = displacement from target
+ *   c = damping coefficient
+ *   v = velocity
+ * 
+ * The damping ratio (zeta) determines the behavior:
+ *   zeta < 1: Underdamped (oscillates)
+ *   zeta = 1: Critically damped (fastest without oscillation)
+ *   zeta > 1: Overdamped (slow approach without oscillation)
  */
 struct SpringConfig {
-    float stiffness = 100.0f;   // Spring stiffness (k)
-    float damping = 10.0f;      // Damping coefficient (c)
-    float mass = 1.0f;          // Mass (m)
-    float velocity = 0.0f;      // Initial velocity
+    float stiffness = 100.0f;      // Spring stiffness (k) - higher = faster oscillation
+    float damping = 10.0f;         // Damping coefficient (c) - higher = less oscillation
+    float mass = 1.0f;             // Mass (m) - higher = slower, more momentum
+    float velocity = 0.0f;         // Initial velocity
     float restThreshold = 0.001f;  // Threshold to consider at rest
+    float velocityThreshold = 0.001f;  // Velocity threshold to consider at rest
 
     SpringConfig() = default;
     SpringConfig(float s, float d, float m = 1.0f)
         : stiffness(s), damping(d), mass(m) {}
+
+    /**
+     * @brief Calculate the damping ratio (zeta)
+     * @return Damping ratio: < 1 underdamped, = 1 critical, > 1 overdamped
+     */
+    [[nodiscard]] float getDampingRatio() const {
+        float criticalDamping = 2.0f * std::sqrt(stiffness * mass);
+        return damping / criticalDamping;
+    }
+
+    /**
+     * @brief Calculate the natural frequency (omega_n)
+     * @return Natural angular frequency in rad/s
+     */
+    [[nodiscard]] float getNaturalFrequency() const {
+        return std::sqrt(stiffness / mass);
+    }
+
+    /**
+     * @brief Create a critically damped spring (fastest without oscillation)
+     * @param stiffness Spring stiffness
+     * @param mass Spring mass (default 1.0)
+     * @return SpringConfig with critical damping
+     */
+    static SpringConfig criticallyDamped(float stiffness, float mass = 1.0f) {
+        float criticalDamping = 2.0f * std::sqrt(stiffness * mass);
+        return SpringConfig(stiffness, criticalDamping, mass);
+    }
+
+    /**
+     * @brief Create an underdamped spring (bouncy)
+     * @param stiffness Spring stiffness
+     * @param dampingRatio Ratio < 1.0 (e.g., 0.5 for bouncy)
+     * @param mass Spring mass (default 1.0)
+     * @return SpringConfig with underdamping
+     */
+    static SpringConfig underdamped(float stiffness, float dampingRatio, float mass = 1.0f) {
+        float criticalDamping = 2.0f * std::sqrt(stiffness * mass);
+        return SpringConfig(stiffness, criticalDamping * dampingRatio, mass);
+    }
+
+    /**
+     * @brief Create an overdamped spring (slow, no oscillation)
+     * @param stiffness Spring stiffness
+     * @param dampingRatio Ratio > 1.0 (e.g., 1.5 for slow)
+     * @param mass Spring mass (default 1.0)
+     * @return SpringConfig with overdamping
+     */
+    static SpringConfig overdamped(float stiffness, float dampingRatio, float mass = 1.0f) {
+        float criticalDamping = 2.0f * std::sqrt(stiffness * mass);
+        return SpringConfig(stiffness, criticalDamping * dampingRatio, mass);
+    }
+
+    // Preset configurations
+    
+    /**
+     * @brief Gentle spring - slow, smooth motion
+     */
+    static SpringConfig gentle() {
+        return SpringConfig(50.0f, 14.0f, 1.0f);
+    }
+
+    /**
+     * @brief Wobbly spring - bouncy, playful motion
+     */
+    static SpringConfig wobbly() {
+        return SpringConfig(180.0f, 12.0f, 1.0f);
+    }
+
+    /**
+     * @brief Stiff spring - quick, snappy motion
+     */
+    static SpringConfig stiff() {
+        return SpringConfig(400.0f, 28.0f, 1.0f);
+    }
+
+    /**
+     * @brief Slow spring - very slow, heavy motion
+     */
+    static SpringConfig slow() {
+        return SpringConfig(50.0f, 20.0f, 1.0f);
+    }
+
+    /**
+     * @brief Molasses spring - extremely slow, viscous motion
+     */
+    static SpringConfig molasses() {
+        return SpringConfig(30.0f, 30.0f, 1.0f);
+    }
 };
 
 /**
@@ -217,6 +321,13 @@ public:
     Animation& spring(float stiffness, float damping);
     Animation& springMass(float mass);
     Animation& springVelocity(float velocity);
+    Animation& springConfig(const SpringConfig& config);
+    
+    // Spring presets
+    Animation& springGentle();    // Slow, smooth motion
+    Animation& springWobbly();    // Bouncy, playful motion
+    Animation& springStiff();     // Quick, snappy motion
+    Animation& springSlow();      // Very slow, heavy motion
 
     // Keyframes
     Animation& keyframe(float percent, std::map<Property, float> values);
@@ -292,6 +403,24 @@ enum class GroupMode {
 /**
  * @class AnimationGroup
  * @brief Groups multiple animations for coordinated playback
+ * 
+ * AnimationGroup allows you to combine multiple animations and control
+ * how they execute - either in sequence (one after another) or in parallel
+ * (all at once). Stagger delays can be applied to create wave-like effects.
+ * 
+ * Example - Sequence:
+ * @code
+ * auto group = AnimationGroup(GroupMode::Sequence);
+ * group.add(anim1).add(anim2).add(anim3);
+ * group.play();  // anim1, then anim2, then anim3
+ * @endcode
+ * 
+ * Example - Parallel with stagger:
+ * @code
+ * auto group = AnimationGroup(GroupMode::Parallel);
+ * group.add(anim1).add(anim2).add(anim3).stagger(100.0f);
+ * group.play();  // All start, but with 100ms delay between each
+ * @endcode
  */
 class AnimationGroup {
 public:
@@ -316,10 +445,16 @@ public:
 
     // State
     [[nodiscard]] bool isPlaying() const { return m_playing; }
+    [[nodiscard]] bool isCompleted() const { return m_completed; }
     [[nodiscard]] GroupMode getMode() const { return m_mode; }
+    [[nodiscard]] size_t getAnimationCount() const { return m_entries.size(); }
+    [[nodiscard]] size_t getCurrentIndex() const { return m_currentIndex; }
+    [[nodiscard]] float getTotalDuration() const;
 
     // Callbacks
     AnimationGroup& onComplete(std::function<void()> callback);
+    AnimationGroup& onAnimationStart(std::function<void(size_t index)> callback);
+    AnimationGroup& onAnimationComplete(std::function<void(size_t index)> callback);
 
 private:
     struct GroupEntry {
@@ -327,15 +462,133 @@ private:
         float delay = 0.0f;
         float elapsedDelay = 0.0f;
         bool started = false;
+        bool completed = false;
     };
 
     GroupMode m_mode;
     std::vector<GroupEntry> m_entries;
     float m_staggerDelay = 0.0f;
     bool m_playing = false;
+    bool m_completed = false;
     size_t m_currentIndex = 0;
     std::function<void()> m_onComplete;
+    std::function<void(size_t)> m_onAnimationStart;
+    std::function<void(size_t)> m_onAnimationComplete;
 };
+
+/**
+ * @class AnimationSequence
+ * @brief Builder for creating animation sequences with fluent API
+ * 
+ * AnimationSequence provides a convenient way to chain animations together
+ * using a fluent builder pattern. It supports both sequential and parallel
+ * execution modes.
+ * 
+ * Example:
+ * @code
+ * auto sequence = AnimationSequence::create()
+ *     .then(fadeInAnim)
+ *     .then(slideAnim)
+ *     .with(scaleAnim)  // runs parallel with slideAnim
+ *     .then(bounceAnim)
+ *     .stagger(50.0f)
+ *     .build();
+ * sequence->play();
+ * @endcode
+ */
+class AnimationSequence {
+public:
+    /**
+     * @brief Create a new animation sequence builder
+     * @return AnimationSequence builder
+     */
+    static AnimationSequence create();
+
+    /**
+     * @brief Add an animation to run after the previous one completes
+     * @param animation The animation to add
+     * @return Reference to this for chaining
+     */
+    AnimationSequence& then(AnimationHandle animation);
+
+    /**
+     * @brief Add an animation to run after a delay from the previous one
+     * @param animation The animation to add
+     * @param delayMs Delay in milliseconds after previous animation starts
+     * @return Reference to this for chaining
+     */
+    AnimationSequence& thenAfter(AnimationHandle animation, float delayMs);
+
+    /**
+     * @brief Add an animation to run in parallel with the previous one
+     * @param animation The animation to add
+     * @return Reference to this for chaining
+     */
+    AnimationSequence& with(AnimationHandle animation);
+
+    /**
+     * @brief Add an animation to run in parallel with a delay
+     * @param animation The animation to add
+     * @param delayMs Delay in milliseconds
+     * @return Reference to this for chaining
+     */
+    AnimationSequence& withDelay(AnimationHandle animation, float delayMs);
+
+    /**
+     * @brief Set stagger delay between animations
+     * @param delayMs Delay in milliseconds between each animation start
+     * @return Reference to this for chaining
+     */
+    AnimationSequence& stagger(float delayMs);
+
+    /**
+     * @brief Set callback for when sequence completes
+     * @param callback Function to call on completion
+     * @return Reference to this for chaining
+     */
+    AnimationSequence& onComplete(std::function<void()> callback);
+
+    /**
+     * @brief Build the animation sequence
+     * @return Shared pointer to the built AnimationGroup
+     */
+    std::shared_ptr<AnimationGroup> build();
+
+private:
+    AnimationSequence();
+    
+    struct SequenceEntry {
+        AnimationHandle animation;
+        float delay = 0.0f;
+        bool parallel = false;  // true if should run with previous
+    };
+    
+    std::vector<SequenceEntry> m_entries;
+    float m_staggerDelay = 0.0f;
+    std::function<void()> m_onComplete;
+};
+
+/**
+ * @brief Create a sequence of animations that run one after another
+ * @param animations List of animations to sequence
+ * @return AnimationGroup configured for sequential playback
+ */
+std::shared_ptr<AnimationGroup> sequence(std::initializer_list<AnimationHandle> animations);
+
+/**
+ * @brief Create a group of animations that run in parallel
+ * @param animations List of animations to run together
+ * @return AnimationGroup configured for parallel playback
+ */
+std::shared_ptr<AnimationGroup> parallel(std::initializer_list<AnimationHandle> animations);
+
+/**
+ * @brief Create a staggered animation sequence
+ * @param animations List of animations to stagger
+ * @param delayBetween Delay in milliseconds between each animation start
+ * @return AnimationGroup configured with stagger delay
+ */
+std::shared_ptr<AnimationGroup> staggered(std::initializer_list<AnimationHandle> animations, float delayBetween);
 
 
 
@@ -553,6 +806,193 @@ private:
  * @class TweenAnimatorImpl
  * @brief Implementation of TweenAnimator that manages animation state
  */
+class TweenAnimatorImpl;
+
+/**
+ * @class SpringAnimator
+ * @brief Animates widget properties using spring physics
+ * 
+ * SpringAnimator provides physics-based animation with natural-feeling
+ * motion that responds to stiffness and damping parameters.
+ * 
+ * Example:
+ * @code
+ * auto animator = SpringAnimator::create(myWidget)
+ *     .property(Property::X, 0.0f, 100.0f)
+ *     .stiffness(200.0f)
+ *     .damping(15.0f)
+ *     .build();
+ * animator->start();
+ * @endcode
+ */
+class SpringAnimator {
+public:
+    /**
+     * @brief Create a new SpringAnimator for a widget
+     * @param widget The widget to animate
+     * @return SpringAnimator builder
+     */
+    static SpringAnimator create(Widget* widget);
+
+    /**
+     * @brief Add a property to animate
+     * @param prop The property to animate
+     * @param from Starting value
+     * @param to Ending value
+     * @return Reference to this for chaining
+     */
+    SpringAnimator& property(Property prop, float from, float to);
+
+    /**
+     * @brief Add a property to animate from current value
+     * @param prop The property to animate
+     * @param to Ending value
+     * @return Reference to this for chaining
+     */
+    SpringAnimator& propertyTo(Property prop, float to);
+
+    /**
+     * @brief Set spring stiffness
+     * @param value Stiffness value (higher = faster oscillation)
+     * @return Reference to this for chaining
+     */
+    SpringAnimator& stiffness(float value);
+
+    /**
+     * @brief Set spring damping
+     * @param value Damping value (higher = less oscillation)
+     * @return Reference to this for chaining
+     */
+    SpringAnimator& damping(float value);
+
+    /**
+     * @brief Set spring mass
+     * @param value Mass value (higher = slower, more momentum)
+     * @return Reference to this for chaining
+     */
+    SpringAnimator& mass(float value);
+
+    /**
+     * @brief Set initial velocity
+     * @param value Initial velocity
+     * @return Reference to this for chaining
+     */
+    SpringAnimator& velocity(float value);
+
+    /**
+     * @brief Use a preset spring configuration
+     * @param config The spring configuration to use
+     * @return Reference to this for chaining
+     */
+    SpringAnimator& config(const SpringConfig& config);
+
+    /**
+     * @brief Use gentle preset (slow, smooth)
+     * @return Reference to this for chaining
+     */
+    SpringAnimator& gentle();
+
+    /**
+     * @brief Use wobbly preset (bouncy, playful)
+     * @return Reference to this for chaining
+     */
+    SpringAnimator& wobbly();
+
+    /**
+     * @brief Use stiff preset (quick, snappy)
+     * @return Reference to this for chaining
+     */
+    SpringAnimator& stiff();
+
+    /**
+     * @brief Use slow preset (very slow, heavy)
+     * @return Reference to this for chaining
+     */
+    SpringAnimator& slow();
+
+    /**
+     * @brief Set callback for animation start
+     * @param callback Function to call when animation starts
+     * @return Reference to this for chaining
+     */
+    SpringAnimator& onStart(std::function<void()> callback);
+
+    /**
+     * @brief Set callback for animation completion
+     * @param callback Function to call when animation completes
+     * @return Reference to this for chaining
+     */
+    SpringAnimator& onComplete(std::function<void()> callback);
+
+    /**
+     * @brief Set callback for animation updates
+     * @param callback Function to call on each update with progress (0-1)
+     * @return Reference to this for chaining
+     */
+    SpringAnimator& onUpdate(std::function<void(float)> callback);
+
+    /**
+     * @brief Build the animator
+     * @return Shared pointer to the built animator implementation
+     */
+    std::shared_ptr<class SpringAnimatorImpl> build();
+
+private:
+    SpringAnimator(Widget* widget);
+    struct Impl;
+    std::shared_ptr<Impl> m_impl;
+};
+
+/**
+ * @class SpringAnimatorImpl
+ * @brief Implementation of SpringAnimator that manages spring animation state
+ */
+class SpringAnimatorImpl : public std::enable_shared_from_this<SpringAnimatorImpl> {
+public:
+    SpringAnimatorImpl(Widget* widget);
+    ~SpringAnimatorImpl() = default;
+
+    void start();
+    void pause();
+    void resume();
+    void stop();
+    void reset();
+
+    /**
+     * @brief Update the animation
+     * @param deltaTimeMs Time elapsed since last update in milliseconds
+     * @return true if animation is still running
+     */
+    bool update(float deltaTimeMs);
+
+    [[nodiscard]] bool isRunning() const;
+    [[nodiscard]] bool isCompleted() const;
+    [[nodiscard]] float getProgress() const;
+    [[nodiscard]] Widget* getWidget() const { return m_widget; }
+
+    // Configuration
+    void addProperty(Property prop, float from, float to);
+    void setSpringConfig(const SpringConfig& config) { m_springConfig = config; }
+    void setOnStart(std::function<void()> cb) { m_onStart = std::move(cb); }
+    void setOnComplete(std::function<void()> cb) { m_onComplete = std::move(cb); }
+    void setOnUpdate(std::function<void(float)> cb) { m_onUpdate = std::move(cb); }
+
+private:
+    void applyCurrentValues();
+
+    Widget* m_widget;
+    AnimationState m_state = AnimationState::Idle;
+    float m_progress = 0.0f;
+
+    SpringConfig m_springConfig;
+    std::vector<PropertyAnimation> m_properties;
+    std::map<Property, float> m_velocities;
+
+    std::function<void()> m_onStart;
+    std::function<void()> m_onComplete;
+    std::function<void(float)> m_onUpdate;
+};
+
 class TweenAnimatorImpl : public std::enable_shared_from_this<TweenAnimatorImpl> {
 public:
     TweenAnimatorImpl(Widget* widget);

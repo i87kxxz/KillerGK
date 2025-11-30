@@ -3157,3 +3157,935 @@ RC_GTEST_PROP(ResponsiveLayoutProperties, MultipleLayoutsRecalculationWithinTarg
     }
 }
 
+
+// ============================================================================
+// Property Tests for Animation Interpolation
+// ============================================================================
+
+#include "KillerGK/animation/Animation.hpp"
+
+namespace rc {
+
+/**
+ * @brief Generator for valid Easing values
+ */
+inline Gen<KillerGK::Easing> genEasing() {
+    return gen::element(
+        KillerGK::Easing::Linear,
+        KillerGK::Easing::EaseIn, KillerGK::Easing::EaseOut, KillerGK::Easing::EaseInOut,
+        KillerGK::Easing::EaseInQuad, KillerGK::Easing::EaseOutQuad, KillerGK::Easing::EaseInOutQuad,
+        KillerGK::Easing::EaseInCubic, KillerGK::Easing::EaseOutCubic, KillerGK::Easing::EaseInOutCubic,
+        KillerGK::Easing::EaseInQuart, KillerGK::Easing::EaseOutQuart, KillerGK::Easing::EaseInOutQuart,
+        KillerGK::Easing::EaseInQuint, KillerGK::Easing::EaseOutQuint, KillerGK::Easing::EaseInOutQuint,
+        KillerGK::Easing::EaseInSine, KillerGK::Easing::EaseOutSine, KillerGK::Easing::EaseInOutSine,
+        KillerGK::Easing::EaseInExpo, KillerGK::Easing::EaseOutExpo, KillerGK::Easing::EaseInOutExpo,
+        KillerGK::Easing::EaseInCirc, KillerGK::Easing::EaseOutCirc, KillerGK::Easing::EaseInOutCirc,
+        KillerGK::Easing::EaseInElastic, KillerGK::Easing::EaseOutElastic, KillerGK::Easing::EaseInOutElastic,
+        KillerGK::Easing::EaseInBounce, KillerGK::Easing::EaseOutBounce, KillerGK::Easing::EaseInOutBounce,
+        KillerGK::Easing::EaseInBack, KillerGK::Easing::EaseOutBack, KillerGK::Easing::EaseInOutBack
+    );
+}
+
+/**
+ * @brief Generator for valid Property values
+ */
+inline Gen<KillerGK::Property> genAnimatableProperty() {
+    return gen::element(
+        KillerGK::Property::X, KillerGK::Property::Y,
+        KillerGK::Property::Width, KillerGK::Property::Height,
+        KillerGK::Property::Opacity, KillerGK::Property::Rotation, KillerGK::Property::Scale,
+        KillerGK::Property::BackgroundColorR, KillerGK::Property::BackgroundColorG,
+        KillerGK::Property::BackgroundColorB, KillerGK::Property::BackgroundColorA,
+        KillerGK::Property::BorderRadius, KillerGK::Property::BorderWidth
+    );
+}
+
+/**
+ * @brief Generator for animation duration (in milliseconds)
+ */
+inline Gen<float> genAnimationDuration() {
+    return gen::map(gen::inRange(100, 5000), [](int v) {
+        return static_cast<float>(v);  // 100ms to 5000ms
+    });
+}
+
+/**
+ * @brief Generator for animation from/to values
+ */
+inline Gen<float> genAnimationValue() {
+    return gen::map(gen::inRange(-10000, 10000), [](int v) {
+        return static_cast<float>(v) / 100.0f;  // -100.0 to 100.0
+    });
+}
+
+/**
+ * @brief Generator for progress value [0.0, 1.0]
+ */
+inline Gen<float> genProgress() {
+    return gen::map(gen::inRange(0, 1000), [](int v) {
+        return static_cast<float>(v) / 1000.0f;
+    });
+}
+
+/**
+ * @brief Generator for spring stiffness
+ */
+inline Gen<float> genSpringStiffness() {
+    return gen::map(gen::inRange(10, 500), [](int v) {
+        return static_cast<float>(v);  // 10 to 500
+    });
+}
+
+/**
+ * @brief Generator for spring damping
+ */
+inline Gen<float> genSpringDamping() {
+    return gen::map(gen::inRange(1, 100), [](int v) {
+        return static_cast<float>(v);  // 1 to 100
+    });
+}
+
+/**
+ * @brief Generator for keyframe percent [0.0, 1.0]
+ */
+inline Gen<float> genKeyframePercent() {
+    return gen::map(gen::inRange(0, 100), [](int v) {
+        return static_cast<float>(v) / 100.0f;
+    });
+}
+
+} // namespace rc
+
+/**
+ * **Feature: killergk-gui-library, Property 5: Animation Interpolation Correctness**
+ * 
+ * *For any* tween animation with valid parameters, the interpolated value at 
+ * any time t SHALL be mathematically correct according to the specified easing function.
+ * 
+ * This test verifies that:
+ * 1. Easing function output is always in valid range for standard easings
+ * 2. Linear interpolation produces correct intermediate values
+ * 3. Easing at t=0 returns 0 and at t=1 returns 1
+ * 
+ * **Validates: Requirements 4.1**
+ */
+RC_GTEST_PROP(AnimationInterpolationProperties, EasingFunctionBoundaryValues, ()) {
+    auto easing = *genEasing();
+    
+    // Test boundary conditions: t=0 should give 0, t=1 should give 1
+    float atZero = KillerGK::applyEasing(easing, 0.0f);
+    float atOne = KillerGK::applyEasing(easing, 1.0f);
+    
+    // All easing functions should return 0 at t=0 and 1 at t=1
+    RC_ASSERT(std::abs(atZero) < 0.0001f);
+    RC_ASSERT(std::abs(atOne - 1.0f) < 0.0001f);
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 5: Animation Interpolation Correctness**
+ * 
+ * *For any* progress value t in [0, 1], the easing function output should be 
+ * clamped to a reasonable range (allowing for overshoot in elastic/back easings).
+ * 
+ * **Validates: Requirements 4.1**
+ */
+RC_GTEST_PROP(AnimationInterpolationProperties, EasingFunctionOutputRange, ()) {
+    auto easing = *genEasing();
+    auto t = *genProgress();
+    
+    float result = KillerGK::applyEasing(easing, t);
+    
+    // Most easings stay in [0, 1], but elastic and back can overshoot
+    // Allow a reasonable overshoot range of [-0.5, 1.5]
+    RC_ASSERT(result >= -0.5f && result <= 1.5f);
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 5: Animation Interpolation Correctness**
+ * 
+ * *For any* linear easing, the output should equal the input (identity function).
+ * 
+ * **Validates: Requirements 4.1**
+ */
+RC_GTEST_PROP(AnimationInterpolationProperties, LinearEasingIsIdentity, ()) {
+    auto t = *genProgress();
+    
+    float result = KillerGK::applyEasing(KillerGK::Easing::Linear, t);
+    
+    RC_ASSERT(std::abs(result - t) < 0.0001f);
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 5: Animation Interpolation Correctness**
+ * 
+ * *For any* tween animation with from and to values, the lerp function should
+ * produce mathematically correct intermediate values.
+ * 
+ * **Validates: Requirements 4.1**
+ */
+RC_GTEST_PROP(AnimationInterpolationProperties, LerpProducesCorrectValues, ()) {
+    auto from = *genAnimationValue();
+    auto to = *genAnimationValue();
+    auto t = *genProgress();
+    
+    float result = KillerGK::lerp(from, to, t);
+    float expected = from + (to - from) * t;
+    
+    RC_ASSERT(std::abs(result - expected) < 0.0001f);
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 5: Animation Interpolation Correctness**
+ * 
+ * *For any* tween animation, lerp at t=0 should return 'from' and at t=1 should return 'to'.
+ * 
+ * **Validates: Requirements 4.1**
+ */
+RC_GTEST_PROP(AnimationInterpolationProperties, LerpBoundaryValues, ()) {
+    auto from = *genAnimationValue();
+    auto to = *genAnimationValue();
+    
+    float atZero = KillerGK::lerp(from, to, 0.0f);
+    float atOne = KillerGK::lerp(from, to, 1.0f);
+    
+    RC_ASSERT(std::abs(atZero - from) < 0.0001f);
+    RC_ASSERT(std::abs(atOne - to) < 0.0001f);
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 5: Animation Interpolation Correctness**
+ * 
+ * *For any* tween animation with valid parameters, running the animation to completion
+ * should result in the final value being equal to the target value.
+ * 
+ * **Validates: Requirements 4.1**
+ */
+RC_GTEST_PROP(AnimationInterpolationProperties, TweenAnimationReachesTargetValue, ()) {
+    auto prop = *genAnimatableProperty();
+    auto from = *genAnimationValue();
+    auto to = *genAnimationValue();
+    auto duration = *genAnimationDuration();
+    auto easing = *genEasing();
+    
+    // Create a tween animation
+    auto anim = KillerGK::Animation::create()
+        .property(prop, from, to)
+        .duration(duration)
+        .easing(easing)
+        .build();
+    
+    // Start the animation
+    anim->start();
+    
+    // Run the animation to completion (simulate time passing)
+    float totalTime = 0.0f;
+    float deltaTime = 16.0f;  // ~60 FPS
+    while (anim->isRunning() && totalTime < duration + 1000.0f) {
+        anim->update(deltaTime);
+        totalTime += deltaTime;
+    }
+    
+    // Animation should be completed
+    RC_ASSERT(anim->isCompleted());
+    
+    // Final value should be the target value
+    float finalValue = anim->getCurrentValue(prop);
+    RC_ASSERT(std::abs(finalValue - to) < 0.01f);
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 5: Animation Interpolation Correctness**
+ * 
+ * *For any* tween animation, the progress should monotonically increase from 0 to 1
+ * (for non-yoyo animations).
+ * 
+ * **Validates: Requirements 4.1**
+ */
+RC_GTEST_PROP(AnimationInterpolationProperties, TweenProgressMonotonicallyIncreases, ()) {
+    auto prop = *genAnimatableProperty();
+    auto from = *genAnimationValue();
+    auto to = *genAnimationValue();
+    auto duration = *genAnimationDuration();
+    
+    // Use linear easing for predictable progress
+    auto anim = KillerGK::Animation::create()
+        .property(prop, from, to)
+        .duration(duration)
+        .easing(KillerGK::Easing::Linear)
+        .build();
+    
+    anim->start();
+    
+    float lastProgress = 0.0f;
+    float totalTime = 0.0f;
+    float deltaTime = 16.0f;
+    
+    while (anim->isRunning() && totalTime < duration + 100.0f) {
+        anim->update(deltaTime);
+        float currentProgress = anim->getProgress();
+        
+        // Progress should never decrease
+        RC_ASSERT(currentProgress >= lastProgress - 0.001f);  // Small tolerance for float precision
+        lastProgress = currentProgress;
+        totalTime += deltaTime;
+    }
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 5: Animation Interpolation Correctness**
+ * 
+ * *For any* spring animation with valid parameters, the animation should eventually
+ * converge to the target value (reach rest state).
+ * 
+ * Note: We use spring presets or constrained parameters to ensure convergence
+ * within a reasonable time. Very low stiffness with very low damping can take
+ * extremely long to settle, which is correct physics but impractical for testing.
+ * 
+ * **Validates: Requirements 4.2**
+ */
+RC_GTEST_PROP(AnimationInterpolationProperties, SpringAnimationConvergesToTarget, ()) {
+    auto prop = *genAnimatableProperty();
+    auto from = *genAnimationValue();
+    auto to = *genAnimationValue();
+    
+    // Use spring presets that are designed to converge in reasonable time
+    // These are the actual presets users would use in practice
+    auto presetIndex = *gen::inRange(0, 4);
+    KillerGK::SpringConfig config;
+    switch (presetIndex) {
+        case 0: config = KillerGK::SpringConfig::gentle(); break;
+        case 1: config = KillerGK::SpringConfig::wobbly(); break;
+        case 2: config = KillerGK::SpringConfig::stiff(); break;
+        case 3: config = KillerGK::SpringConfig::slow(); break;
+        default: config = KillerGK::SpringConfig::criticallyDamped(100.0f); break;
+    }
+    
+    // Create a spring animation
+    auto anim = KillerGK::Animation::create()
+        .property(prop, from, to)
+        .springConfig(config)
+        .build();
+    
+    anim->start();
+    
+    // Run the animation for a reasonable time (springs can take longer)
+    float totalTime = 0.0f;
+    float deltaTime = 16.0f;
+    float maxTime = 15000.0f;  // 15 seconds max for slow springs
+    
+    while (anim->isRunning() && totalTime < maxTime) {
+        anim->update(deltaTime);
+        totalTime += deltaTime;
+    }
+    
+    // Animation should be completed (reached rest state)
+    RC_ASSERT(anim->isCompleted());
+    
+    // Final value should be close to target
+    float finalValue = anim->getCurrentValue(prop);
+    RC_ASSERT(std::abs(finalValue - to) < 0.1f);  // Allow small tolerance for spring settling
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 5: Animation Interpolation Correctness**
+ * 
+ * *For any* spring configuration, the damping ratio calculation should be correct.
+ * 
+ * **Validates: Requirements 4.2**
+ */
+RC_GTEST_PROP(AnimationInterpolationProperties, SpringDampingRatioCalculation, ()) {
+    auto stiffness = *genSpringStiffness();
+    auto damping = *genSpringDamping();
+    auto massInt = *gen::inRange(1, 10);
+    float mass = static_cast<float>(massInt);
+    
+    KillerGK::SpringConfig config(stiffness, damping, mass);
+    
+    // Calculate expected damping ratio
+    float criticalDamping = 2.0f * std::sqrt(stiffness * mass);
+    float expectedRatio = damping / criticalDamping;
+    
+    float actualRatio = config.getDampingRatio();
+    
+    RC_ASSERT(std::abs(actualRatio - expectedRatio) < 0.0001f);
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 5: Animation Interpolation Correctness**
+ * 
+ * *For any* spring configuration, the natural frequency calculation should be correct.
+ * 
+ * **Validates: Requirements 4.2**
+ */
+RC_GTEST_PROP(AnimationInterpolationProperties, SpringNaturalFrequencyCalculation, ()) {
+    auto stiffness = *genSpringStiffness();
+    auto massInt = *gen::inRange(1, 10);
+    float mass = static_cast<float>(massInt);
+    
+    KillerGK::SpringConfig config(stiffness, 10.0f, mass);
+    
+    // Calculate expected natural frequency
+    float expectedFreq = std::sqrt(stiffness / mass);
+    float actualFreq = config.getNaturalFrequency();
+    
+    RC_ASSERT(std::abs(actualFreq - expectedFreq) < 0.0001f);
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 5: Animation Interpolation Correctness**
+ * 
+ * *For any* critically damped spring, the damping ratio should be 1.0.
+ * 
+ * **Validates: Requirements 4.2**
+ */
+RC_GTEST_PROP(AnimationInterpolationProperties, CriticallyDampedSpringHasRatioOne, ()) {
+    auto stiffness = *genSpringStiffness();
+    auto massInt = *gen::inRange(1, 10);
+    float mass = static_cast<float>(massInt);
+    
+    auto config = KillerGK::SpringConfig::criticallyDamped(stiffness, mass);
+    
+    float ratio = config.getDampingRatio();
+    
+    RC_ASSERT(std::abs(ratio - 1.0f) < 0.0001f);
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 5: Animation Interpolation Correctness**
+ * 
+ * *For any* keyframe animation with valid keyframes, the interpolation at keyframe
+ * positions should return the exact keyframe values.
+ * 
+ * **Validates: Requirements 4.3**
+ */
+RC_GTEST_PROP(AnimationInterpolationProperties, KeyframeAnimationAtKeyframePositions, ()) {
+    auto prop = *genAnimatableProperty();
+    auto value0 = *genAnimationValue();
+    auto value50 = *genAnimationValue();
+    auto value100 = *genAnimationValue();
+    auto duration = *genAnimationDuration();
+    
+    // Create a keyframe animation with keyframes at 0%, 50%, and 100%
+    auto anim = KillerGK::Animation::create()
+        .keyframe(0.0f, {{prop, value0}})
+        .keyframe(0.5f, {{prop, value50}})
+        .keyframe(1.0f, {{prop, value100}})
+        .duration(duration)
+        .build();
+    
+    anim->start();
+    
+    // Test at 0%
+    anim->update(0.0f);
+    float atStart = anim->getCurrentValue(prop);
+    RC_ASSERT(std::abs(atStart - value0) < 0.01f);
+    
+    // Run to 50%
+    anim->reset();
+    anim->start();
+    float halfDuration = duration * 0.5f;
+    anim->update(halfDuration);
+    float atMiddle = anim->getCurrentValue(prop);
+    RC_ASSERT(std::abs(atMiddle - value50) < 0.01f);
+    
+    // Run to 100%
+    anim->reset();
+    anim->start();
+    float totalTime = 0.0f;
+    while (anim->isRunning() && totalTime < duration + 100.0f) {
+        anim->update(16.0f);
+        totalTime += 16.0f;
+    }
+    float atEnd = anim->getCurrentValue(prop);
+    RC_ASSERT(std::abs(atEnd - value100) < 0.01f);
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 5: Animation Interpolation Correctness**
+ * 
+ * *For any* animation, the clamp function should correctly constrain values.
+ * 
+ * **Validates: Requirements 4.1, 4.2, 4.3**
+ */
+RC_GTEST_PROP(AnimationInterpolationProperties, ClampFunctionCorrectness, ()) {
+    auto value = *genAnimationValue();
+    auto minInt = *gen::inRange(-100, 0);
+    auto maxInt = *gen::inRange(0, 100);
+    float minVal = static_cast<float>(minInt);
+    float maxVal = static_cast<float>(maxInt);
+    
+    // Ensure min <= max
+    if (minVal > maxVal) std::swap(minVal, maxVal);
+    
+    float result = KillerGK::clamp(value, minVal, maxVal);
+    
+    // Result should be within bounds
+    RC_ASSERT(result >= minVal);
+    RC_ASSERT(result <= maxVal);
+    
+    // If value was in range, result should equal value
+    if (value >= minVal && value <= maxVal) {
+        RC_ASSERT(std::abs(result - value) < 0.0001f);
+    }
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 5: Animation Interpolation Correctness**
+ * 
+ * *For any* tween animation with delay, the animation should not progress during the delay period.
+ * 
+ * **Validates: Requirements 4.1**
+ */
+RC_GTEST_PROP(AnimationInterpolationProperties, TweenAnimationRespectsDelay, ()) {
+    auto prop = *genAnimatableProperty();
+    auto from = *genAnimationValue();
+    auto to = *genAnimationValue();
+    auto duration = *genAnimationDuration();
+    auto delayInt = *gen::inRange(100, 1000);
+    float delay = static_cast<float>(delayInt);
+    
+    auto anim = KillerGK::Animation::create()
+        .property(prop, from, to)
+        .duration(duration)
+        .delay(delay)
+        .easing(KillerGK::Easing::Linear)
+        .build();
+    
+    anim->start();
+    
+    // Update with time less than delay
+    anim->update(delay * 0.5f);
+    
+    // Progress should still be 0 during delay
+    RC_ASSERT(anim->getProgress() < 0.01f);
+    
+    // Value should still be at 'from'
+    float currentValue = anim->getCurrentValue(prop);
+    RC_ASSERT(std::abs(currentValue - from) < 0.01f);
+}
+
+// ============================================================================
+// Property Tests for Animation Sequencing
+// ============================================================================
+
+#include "KillerGK/animation/Animation.hpp"
+
+namespace rc {
+
+/**
+ * @brief Generator for animation duration in milliseconds
+ */
+inline Gen<float> genSequenceAnimationDuration() {
+    return gen::map(gen::inRange(50, 500), [](int v) {
+        return static_cast<float>(v);
+    });
+}
+
+/**
+ * @brief Generator for stagger delay in milliseconds
+ */
+inline Gen<float> genStaggerDelay() {
+    return gen::map(gen::inRange(10, 200), [](int v) {
+        return static_cast<float>(v);
+    });
+}
+
+/**
+ * @brief Generator for number of animations in a sequence
+ */
+inline Gen<int> genSequenceLength() {
+    return gen::inRange(2, 6);  // 2 to 5 animations
+}
+
+} // namespace rc
+
+/**
+ * **Feature: killergk-gui-library, Property 6: Animation Sequencing**
+ * 
+ * *For any* chained animation sequence, animations SHALL execute in the 
+ * correct order - each animation starts only after the previous one completes.
+ * 
+ * This test verifies that:
+ * 1. In a sequence, animation N does not start until animation N-1 completes
+ * 2. The order of animation starts matches the order they were added
+ * 
+ * **Validates: Requirements 4.4, 4.6**
+ */
+RC_GTEST_PROP(AnimationSequencingProperties, SequenceExecutesInOrder, ()) {
+    auto numAnimations = *genSequenceLength();
+    auto duration = *genSequenceAnimationDuration();
+    
+    // Create animations and track their start order
+    std::vector<size_t> startOrder;
+    std::vector<size_t> completeOrder;
+    std::vector<KillerGK::AnimationHandle> animations;
+    
+    auto group = std::make_shared<KillerGK::AnimationGroup>(KillerGK::GroupMode::Sequence);
+    
+    for (int i = 0; i < numAnimations; ++i) {
+        auto anim = KillerGK::Animation::create()
+            .property(KillerGK::Property::Opacity, 0.0f, 1.0f)
+            .duration(duration)
+            .easing(KillerGK::Easing::Linear)
+            .build();
+        
+        animations.push_back(anim);
+        group->add(anim);
+    }
+    
+    // Set up callbacks to track order
+    group->onAnimationStart([&startOrder](size_t index) {
+        startOrder.push_back(index);
+    });
+    
+    group->onAnimationComplete([&completeOrder](size_t index) {
+        completeOrder.push_back(index);
+    });
+    
+    // Play the sequence
+    group->play();
+    
+    // Simulate time passing - update enough to complete all animations
+    float totalTime = duration * numAnimations + 100.0f;  // Extra buffer
+    float timeStep = 16.0f;  // ~60 FPS
+    
+    while (group->update(timeStep) && totalTime > 0) {
+        totalTime -= timeStep;
+    }
+    
+    // Verify all animations started and completed
+    RC_ASSERT(static_cast<int>(startOrder.size()) == numAnimations);
+    RC_ASSERT(static_cast<int>(completeOrder.size()) == numAnimations);
+    
+    // Verify animations started in correct order (0, 1, 2, ...)
+    for (int i = 0; i < numAnimations; ++i) {
+        RC_ASSERT(startOrder[i] == static_cast<size_t>(i));
+    }
+    
+    // Verify animations completed in correct order (0, 1, 2, ...)
+    for (int i = 0; i < numAnimations; ++i) {
+        RC_ASSERT(completeOrder[i] == static_cast<size_t>(i));
+    }
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 6: Animation Sequencing**
+ * 
+ * *For any* staggered animation sequence, animations SHALL start with the 
+ * correct timing delays between them.
+ * 
+ * This test verifies that:
+ * 1. In a staggered sequence, animation N starts staggerDelay ms after animation N-1
+ * 2. All animations eventually complete
+ * 
+ * **Validates: Requirements 4.4, 4.6**
+ */
+RC_GTEST_PROP(AnimationSequencingProperties, StaggeredAnimationsHaveCorrectTiming, ()) {
+    auto numAnimations = *genSequenceLength();
+    auto duration = *genSequenceAnimationDuration();
+    auto staggerDelay = *genStaggerDelay();
+    
+    // Track when each animation starts (in simulation time)
+    std::vector<float> startTimes(numAnimations, -1.0f);
+    float currentTime = 0.0f;
+    
+    // Create staggered animation group
+    auto group = KillerGK::staggered({}, staggerDelay);
+    
+    std::vector<KillerGK::AnimationHandle> animations;
+    for (int i = 0; i < numAnimations; ++i) {
+        auto anim = KillerGK::Animation::create()
+            .property(KillerGK::Property::Opacity, 0.0f, 1.0f)
+            .duration(duration)
+            .easing(KillerGK::Easing::Linear)
+            .build();
+        
+        animations.push_back(anim);
+        group->add(anim);
+    }
+    
+    // Track animation starts
+    group->onAnimationStart([&startTimes, &currentTime](size_t index) {
+        if (index < startTimes.size()) {
+            startTimes[index] = currentTime;
+        }
+    });
+    
+    // Apply stagger
+    group->stagger(staggerDelay);
+    
+    // Play the group
+    group->play();
+    
+    // Simulate time passing
+    float totalTime = duration + (numAnimations * staggerDelay) + 500.0f;
+    float timeStep = 16.0f;
+    
+    while (group->update(timeStep) && totalTime > 0) {
+        currentTime += timeStep;
+        totalTime -= timeStep;
+    }
+    
+    // Verify all animations started
+    for (int i = 0; i < numAnimations; ++i) {
+        RC_ASSERT(startTimes[i] >= 0.0f);
+    }
+    
+    // Verify stagger timing - each animation should start approximately
+    // staggerDelay ms after the previous one
+    // Allow some tolerance due to discrete time steps
+    float tolerance = timeStep * 2.0f;  // Allow 2 time steps of tolerance
+    
+    for (int i = 1; i < numAnimations; ++i) {
+        float expectedDelay = staggerDelay;
+        float actualDelay = startTimes[i] - startTimes[i - 1];
+        
+        RC_ASSERT(std::abs(actualDelay - expectedDelay) <= tolerance);
+    }
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 6: Animation Sequencing**
+ * 
+ * *For any* parallel animation group, all animations SHALL start at the same time.
+ * 
+ * This test verifies that:
+ * 1. In parallel mode, all animations start simultaneously
+ * 2. All animations complete (not necessarily at the same time)
+ * 
+ * **Validates: Requirements 4.4, 4.6**
+ */
+RC_GTEST_PROP(AnimationSequencingProperties, ParallelAnimationsStartTogether, ()) {
+    auto numAnimations = *genSequenceLength();
+    
+    // Track when each animation starts
+    std::vector<float> startTimes(numAnimations, -1.0f);
+    float currentTime = 0.0f;
+    
+    // Create parallel animation group
+    auto group = std::make_shared<KillerGK::AnimationGroup>(KillerGK::GroupMode::Parallel);
+    
+    std::vector<KillerGK::AnimationHandle> animations;
+    for (int i = 0; i < numAnimations; ++i) {
+        // Use different durations to verify they all start together
+        // but may complete at different times
+        auto durationInt = *gen::inRange(100, 500);
+        float duration = static_cast<float>(durationInt);
+        
+        auto anim = KillerGK::Animation::create()
+            .property(KillerGK::Property::Opacity, 0.0f, 1.0f)
+            .duration(duration)
+            .easing(KillerGK::Easing::Linear)
+            .build();
+        
+        animations.push_back(anim);
+        group->add(anim);
+    }
+    
+    // Track animation starts
+    group->onAnimationStart([&startTimes, &currentTime](size_t index) {
+        if (index < startTimes.size()) {
+            startTimes[index] = currentTime;
+        }
+    });
+    
+    // Play the group
+    group->play();
+    
+    // Simulate time passing
+    float totalTime = 1000.0f;  // Enough time for all animations
+    float timeStep = 16.0f;
+    
+    while (group->update(timeStep) && totalTime > 0) {
+        currentTime += timeStep;
+        totalTime -= timeStep;
+    }
+    
+    // Verify all animations started
+    for (int i = 0; i < numAnimations; ++i) {
+        RC_ASSERT(startTimes[i] >= 0.0f);
+    }
+    
+    // Verify all animations started at the same time (within tolerance)
+    float tolerance = timeStep;  // Allow 1 time step of tolerance
+    float firstStartTime = startTimes[0];
+    
+    for (int i = 1; i < numAnimations; ++i) {
+        RC_ASSERT(std::abs(startTimes[i] - firstStartTime) <= tolerance);
+    }
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 6: Animation Sequencing**
+ * 
+ * *For any* animation sequence built with AnimationSequence builder,
+ * the 'then' method SHALL cause animations to execute sequentially.
+ * 
+ * This test verifies that:
+ * 1. AnimationSequence::then() creates proper sequential execution
+ * 2. Each animation completes before the next starts
+ * 
+ * **Validates: Requirements 4.4, 4.6**
+ */
+RC_GTEST_PROP(AnimationSequencingProperties, AnimationSequenceBuilderThenIsSequential, ()) {
+    auto numAnimations = *genSequenceLength();
+    auto duration = *genSequenceAnimationDuration();
+    
+    // Track completion and start order
+    std::vector<size_t> startOrder;
+    std::vector<size_t> completeOrder;
+    
+    // Build sequence using the builder pattern
+    auto sequenceBuilder = KillerGK::AnimationSequence::create();
+    
+    std::vector<KillerGK::AnimationHandle> animations;
+    for (int i = 0; i < numAnimations; ++i) {
+        auto anim = KillerGK::Animation::create()
+            .property(KillerGK::Property::Opacity, 0.0f, 1.0f)
+            .duration(duration)
+            .easing(KillerGK::Easing::Linear)
+            .onStart([&startOrder, i]() {
+                startOrder.push_back(static_cast<size_t>(i));
+            })
+            .onComplete([&completeOrder, i]() {
+                completeOrder.push_back(static_cast<size_t>(i));
+            })
+            .build();
+        
+        animations.push_back(anim);
+        sequenceBuilder.then(anim);
+    }
+    
+    auto group = sequenceBuilder.build();
+    
+    // Play the sequence
+    group->play();
+    
+    // Simulate time passing
+    float totalTime = duration * numAnimations + 500.0f;
+    float timeStep = 16.0f;
+    
+    while (group->update(timeStep) && totalTime > 0) {
+        totalTime -= timeStep;
+    }
+    
+    // Verify all animations started and completed
+    RC_ASSERT(static_cast<int>(startOrder.size()) == numAnimations);
+    RC_ASSERT(static_cast<int>(completeOrder.size()) == numAnimations);
+    
+    // Verify sequential execution: animation i should complete before animation i+1 starts
+    // This is verified by checking that the complete order matches the start order
+    for (int i = 0; i < numAnimations; ++i) {
+        RC_ASSERT(startOrder[i] == static_cast<size_t>(i));
+        RC_ASSERT(completeOrder[i] == static_cast<size_t>(i));
+    }
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 6: Animation Sequencing**
+ * 
+ * *For any* animation group, the total duration SHALL equal the sum of 
+ * individual durations (for sequence) or the max duration (for parallel).
+ * 
+ * This test verifies that:
+ * 1. Sequence total duration = sum of all animation durations
+ * 2. Parallel total duration = max of all animation durations
+ * 
+ * **Validates: Requirements 4.4, 4.6**
+ */
+RC_GTEST_PROP(AnimationSequencingProperties, GroupDurationCalculation, ()) {
+    auto numAnimations = *genSequenceLength();
+    
+    // Generate random durations for each animation
+    std::vector<float> durations;
+    float sumDuration = 0.0f;
+    float maxDuration = 0.0f;
+    
+    for (int i = 0; i < numAnimations; ++i) {
+        auto durationInt = *gen::inRange(100, 500);
+        float duration = static_cast<float>(durationInt);
+        durations.push_back(duration);
+        sumDuration += duration;
+        maxDuration = std::max(maxDuration, duration);
+    }
+    
+    // Create sequence group
+    auto sequenceGroup = std::make_shared<KillerGK::AnimationGroup>(KillerGK::GroupMode::Sequence);
+    
+    // Create parallel group
+    auto parallelGroup = std::make_shared<KillerGK::AnimationGroup>(KillerGK::GroupMode::Parallel);
+    
+    for (int i = 0; i < numAnimations; ++i) {
+        auto anim = KillerGK::Animation::create()
+            .property(KillerGK::Property::Opacity, 0.0f, 1.0f)
+            .duration(durations[i])
+            .easing(KillerGK::Easing::Linear)
+            .build();
+        
+        sequenceGroup->add(anim);
+        
+        // Create a separate animation for parallel group
+        auto anim2 = KillerGK::Animation::create()
+            .property(KillerGK::Property::Opacity, 0.0f, 1.0f)
+            .duration(durations[i])
+            .easing(KillerGK::Easing::Linear)
+            .build();
+        
+        parallelGroup->add(anim2);
+    }
+    
+    // Verify sequence duration equals sum
+    float sequenceTotalDuration = sequenceGroup->getTotalDuration();
+    RC_ASSERT(std::abs(sequenceTotalDuration - sumDuration) < 1.0f);
+    
+    // Verify parallel duration equals max
+    float parallelTotalDuration = parallelGroup->getTotalDuration();
+    RC_ASSERT(std::abs(parallelTotalDuration - maxDuration) < 1.0f);
+}
+
+/**
+ * **Feature: killergk-gui-library, Property 6: Animation Sequencing**
+ * 
+ * *For any* animation sequence, stopping the group SHALL stop all animations.
+ * 
+ * This test verifies that:
+ * 1. Calling stop() on a group stops all contained animations
+ * 2. No further callbacks are triggered after stop
+ * 
+ * **Validates: Requirements 4.4, 4.6**
+ */
+RC_GTEST_PROP(AnimationSequencingProperties, StopGroupStopsAllAnimations, ()) {
+    auto numAnimations = *genSequenceLength();
+    auto duration = *genSequenceAnimationDuration();
+    
+    // Create sequence group
+    auto group = std::make_shared<KillerGK::AnimationGroup>(KillerGK::GroupMode::Sequence);
+    
+    std::vector<KillerGK::AnimationHandle> animations;
+    for (int i = 0; i < numAnimations; ++i) {
+        auto anim = KillerGK::Animation::create()
+            .property(KillerGK::Property::Opacity, 0.0f, 1.0f)
+            .duration(duration)
+            .easing(KillerGK::Easing::Linear)
+            .build();
+        
+        animations.push_back(anim);
+        group->add(anim);
+    }
+    
+    // Play the group
+    group->play();
+    
+    // Update a bit to start the first animation
+    group->update(duration * 0.5f);
+    
+    // Stop the group
+    group->stop();
+    
+    // Verify group is no longer playing
+    RC_ASSERT(!group->isPlaying());
+    RC_ASSERT(group->isCompleted());
+    
+    // Further updates should return false (not running)
+    RC_ASSERT(!group->update(16.0f));
+}
