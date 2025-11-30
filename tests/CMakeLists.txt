@@ -79,6 +79,11 @@ macro(add_kgk_test TEST_NAME)
         TIMEOUT 60
         ENVIRONMENT "GTEST_COLOR=1"
     )
+    
+    # Enable /bigobj for MSVC to handle large object files (many template instantiations)
+    if(MSVC)
+        target_compile_options(${TEST_NAME} PRIVATE /bigobj)
+    endif()
 endmacro()
 
 # Core module tests
