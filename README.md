@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.svg" alt="KillerGK Logo" width="200"/>
+  <img src="docs/KillerGK.png" alt="KillerGK Logo" width="200"/>
 </p>
 
 <h1 align="center">KillerGK</h1>
