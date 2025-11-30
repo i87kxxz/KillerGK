@@ -1,0 +1,120 @@
+@PACKAGE_INIT@
+
+# =============================================================================
+# KillerGK CMake Configuration File
+# =============================================================================
+# This file is used by find_package(KillerGK) to locate and configure
+# the KillerGK library and its dependencies.
+#
+# Usage:
+#   find_package(KillerGK REQUIRED)
+#   target_link_libraries(MyApp PRIVATE KillerGK::KillerGK)
+#
+# Or with specific modules:
+#   find_package(KillerGK REQUIRED COMPONENTS 2D 3D Audio)
+#   target_link_libraries(MyApp PRIVATE 
+#       KillerGK::KillerGK 
+#       KillerGK::KGK2D 
+#       KillerGK::KGK3D 
+#       KillerGK::KGKAudio
+#   )
+# =============================================================================
+
+include(CMakeFindDependencyMacro)
+
+# =============================================================================
+# Required Dependencies
+# =============================================================================
+find_dependency(Vulkan REQUIRED)
+find_dependency(glfw3 REQUIRED)
+find_dependency(glm REQUIRED)
+
+# =============================================================================
+# Optional Dependencies (based on build configuration)
+# =============================================================================
+
+# FreeType for text rendering
+find_dependency(Freetype QUIET)
+
+# Assimp for 3D model loading (KGK3D module)
+find_dependency(assimp QUIET)
+
+# =============================================================================
+# Include Targets
+# =============================================================================
+include("${CMAKE_CURRENT_LIST_DIR}/KillerGKTargets.cmake")
+
+# =============================================================================
+# Component Handling
+# =============================================================================
+set(_KillerGK_SUPPORTED_COMPONENTS Core 2D 3D Audio Net Media)
+
+# Map component names to target names
+set(_KillerGK_Core_TARGET KillerGK::KillerGK)
+set(_KillerGK_2D_TARGET KillerGK::KGK2D)
+set(_KillerGK_3D_TARGET KillerGK::KGK3D)
+set(_KillerGK_Audio_TARGET KillerGK::KGKAudio)
+set(_KillerGK_Net_TARGET KillerGK::KGKNet)
+set(_KillerGK_Media_TARGET KillerGK::KGKMedia)
+
+# Check requested components
+foreach(_comp ${KillerGK_FIND_COMPONENTS})
+    if(NOT _comp IN_LIST _KillerGK_SUPPORTED_COMPONENTS)
+        set(KillerGK_FOUND FALSE)
+        set(KillerGK_NOT_FOUND_MESSAGE "Unsupported component: ${_comp}")
+        return()
+    endif()
+    
+    if(TARGET ${_KillerGK_${_comp}_TARGET})
+        set(KillerGK_${_comp}_FOUND TRUE)
+    else()
+        set(KillerGK_${_comp}_FOUND FALSE)
+        if(KillerGK_FIND_REQUIRED_${_comp})
+            set(KillerGK_FOUND FALSE)
+            set(KillerGK_NOT_FOUND_MESSAGE "Required component not found: ${_comp}")
+        endif()
+    endif()
+endforeach()
+
+# Check required components
+check_required_components(KillerGK)
+
+# =============================================================================
+# Convenience Aliases (KGK:: namespace)
+# =============================================================================
+if(NOT TARGET KGK::Core)
+    add_library(KGK::Core ALIAS KillerGK::KillerGK)
+endif()
+
+if(TARGET KillerGK::KGK2D AND NOT TARGET KGK::2D)
+    add_library(KGK::2D ALIAS KillerGK::KGK2D)
+endif()
+
+if(TARGET KillerGK::KGK3D AND NOT TARGET KGK::3D)
+    add_library(KGK::3D ALIAS KillerGK::KGK3D)
+endif()
+
+if(TARGET KillerGK::KGKAudio AND NOT TARGET KGK::Audio)
+    add_library(KGK::Audio ALIAS KillerGK::KGKAudio)
+endif()
+
+if(TARGET KillerGK::KGKNet AND NOT TARGET KGK::Net)
+    add_library(KGK::Net ALIAS KillerGK::KGKNet)
+endif()
+
+if(TARGET KillerGK::KGKMedia AND NOT TARGET KGK::Media)
+    add_library(KGK::Media ALIAS KillerGK::KGKMedia)
+endif()
+
+# =============================================================================
+# Feature Detection Variables
+# =============================================================================
+set(KillerGK_VERSION "@PROJECT_VERSION@")
+set(KillerGK_VERSION_MAJOR "@PROJECT_VERSION_MAJOR@")
+set(KillerGK_VERSION_MINOR "@PROJECT_VERSION_MINOR@")
+set(KillerGK_VERSION_PATCH "@PROJECT_VERSION_PATCH@")
+
+# Feature flags (set during build)
+set(KillerGK_HAS_FREETYPE @Freetype_FOUND@)
+set(KillerGK_HAS_ASSIMP @assimp_FOUND@)
+set(KillerGK_HAS_MINIAUDIO @KGK_ENABLE_MINIAUDIO@)
