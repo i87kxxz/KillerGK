@@ -1253,12 +1253,30 @@ size_t AnimationManager::getActiveAnimationCount() const {
 // ============================================================================
 
 StateTransitionManager::StateTransitionManager() {
-    // Set up default transitions
+    // Set up default transitions for each widget state
+    // Normal state - base state with no modifications
     m_transitions[WidgetStateType::Normal] = StateTransitionConfig(150.0f, Easing::EaseOut);
-    m_transitions[WidgetStateType::Hovered] = StateTransitionConfig(100.0f, Easing::EaseOut);
-    m_transitions[WidgetStateType::Pressed] = StateTransitionConfig(50.0f, Easing::EaseOut);
-    m_transitions[WidgetStateType::Focused] = StateTransitionConfig(150.0f, Easing::EaseInOut);
-    m_transitions[WidgetStateType::Disabled] = StateTransitionConfig(200.0f, Easing::EaseOut);
+    
+    // Hovered state - subtle visual feedback when mouse hovers
+    StateTransitionConfig hoverConfig(100.0f, Easing::EaseOut);
+    hoverConfig.propertyDeltas[Property::Opacity] = 0.05f;  // Slight brightness increase
+    m_transitions[WidgetStateType::Hovered] = hoverConfig;
+    
+    // Pressed state - immediate feedback when clicked
+    StateTransitionConfig pressedConfig(50.0f, Easing::EaseOut);
+    pressedConfig.propertyDeltas[Property::Opacity] = -0.1f;  // Darken slightly
+    pressedConfig.propertyDeltas[Property::Scale] = -0.02f;   // Slight scale down
+    m_transitions[WidgetStateType::Pressed] = pressedConfig;
+    
+    // Focused state - keyboard focus indicator
+    StateTransitionConfig focusedConfig(150.0f, Easing::EaseInOut);
+    // Focus is typically shown via border, not opacity/scale changes
+    m_transitions[WidgetStateType::Focused] = focusedConfig;
+    
+    // Disabled state - clearly indicate non-interactive state
+    StateTransitionConfig disabledConfig(200.0f, Easing::EaseOut);
+    disabledConfig.propertyDeltas[Property::Opacity] = -0.4f;  // Significant fade
+    m_transitions[WidgetStateType::Disabled] = disabledConfig;
 }
 
 void StateTransitionManager::setTransition(WidgetStateType state, const StateTransitionConfig& config) {
@@ -1276,41 +1294,88 @@ void StateTransitionManager::transitionTo(WidgetStateType newState, Widget* widg
         return;
     }
 
+    // Stop any active transition
+    if (m_activeTransition && m_activeTransition->isRunning()) {
+        m_activeTransition->stop();
+    }
+
     m_targetState = newState;
     m_targetWidget = widget;
 
-    const auto& config = getTransition(newState);
+    const auto& targetConfig = getTransition(newState);
+    const auto& currentConfig = getTransition(m_currentState);
 
     // Create animation for the transition
     auto animBuilder = Animation::create()
-                           .duration(config.duration)
-                           .easing(config.easing);
+                           .duration(targetConfig.duration)
+                           .easing(targetConfig.easing);
 
-    // Add property animations based on state deltas
-    for (const auto& [prop, delta] : config.propertyDeltas) {
-        float currentValue = 0.0f;
+    // Collect all properties that need to be animated
+    std::map<Property, std::pair<float, float>> propertyTransitions;
 
-        // Get current value from widget
-        switch (prop) {
-            case Property::Opacity:
-                currentValue = widget->getOpacity();
-                break;
-            case Property::Scale:
-                currentValue = 1.0f;  // Default scale
-                break;
-            case Property::BackgroundColorA:
-                currentValue = widget->getBackgroundColor().a;
-                break;
-            default:
-                break;
+    // When transitioning to Normal, we need to reverse any deltas from current state
+    if (newState == WidgetStateType::Normal) {
+        for (const auto& [prop, delta] : currentConfig.propertyDeltas) {
+            float currentValue = getWidgetPropertyValue(*widget, prop);
+            float targetValue = currentValue - delta;  // Remove the delta
+            propertyTransitions[prop] = {currentValue, targetValue};
         }
+    } else {
+        // Transitioning to a new state
+        // First, reverse any deltas from current state, then apply new state deltas
+        for (const auto& [prop, delta] : currentConfig.propertyDeltas) {
+            float currentValue = getWidgetPropertyValue(*widget, prop);
+            float baseValue = currentValue - delta;  // Get base value
+            propertyTransitions[prop] = {currentValue, baseValue};
+        }
+        
+        // Apply new state deltas
+        for (const auto& [prop, delta] : targetConfig.propertyDeltas) {
+            float currentValue = getWidgetPropertyValue(*widget, prop);
+            float baseValue = currentValue;
+            
+            // If we already have a transition for this property, use its target as base
+            auto it = propertyTransitions.find(prop);
+            if (it != propertyTransitions.end()) {
+                baseValue = it->second.second;  // Use the target from reversal
+            }
+            
+            float targetValue = baseValue + delta;
+            propertyTransitions[prop] = {currentValue, targetValue};
+        }
+    }
 
-        animBuilder.property(prop, currentValue, currentValue + delta);
+    // Add all property animations
+    for (const auto& [prop, values] : propertyTransitions) {
+        animBuilder.property(prop, values.first, values.second);
     }
 
     m_activeTransition = animBuilder.build();
+    
+    // Set up update callback to apply animated values to widget
+    m_activeTransition->setOnUpdate([this](float /*progress*/) {
+        if (m_targetWidget && m_activeTransition) {
+            for (const auto& prop : m_activeTransition->getProperties()) {
+                setWidgetPropertyValue(*m_targetWidget, prop.property, prop.currentValue);
+            }
+        }
+    });
+    
+    // Set up completion callback
+    m_activeTransition->setOnComplete([this]() {
+        // Ensure final values are applied
+        if (m_targetWidget && m_activeTransition) {
+            for (const auto& prop : m_activeTransition->getProperties()) {
+                setWidgetPropertyValue(*m_targetWidget, prop.property, prop.toValue);
+            }
+        }
+        m_currentState = m_targetState;
+    });
+
     m_activeTransition->start();
-    m_currentState = newState;
+    
+    // Register with animation manager for automatic updates
+    AnimationManager::instance().registerAnimation(m_activeTransition);
 }
 
 bool StateTransitionManager::update(float deltaTimeMs) {
@@ -1318,54 +1383,38 @@ bool StateTransitionManager::update(float deltaTimeMs) {
         return false;
     }
 
-    bool running = m_activeTransition->update(deltaTimeMs);
-
-    // Apply animated values to widget
-    if (m_targetWidget) {
-        for (const auto& prop : m_activeTransition->getProperties()) {
-            switch (prop.property) {
-                case Property::Opacity:
-                    m_targetWidget->opacity(prop.currentValue);
-                    break;
-                case Property::BackgroundColorA: {
-                    Color bg = m_targetWidget->getBackgroundColor();
-                    bg.a = prop.currentValue;
-                    m_targetWidget->backgroundColor(bg);
-                    break;
-                }
-                default:
-                    break;
-            }
-        }
-    }
-
-    return running;
+    return m_activeTransition->update(deltaTimeMs);
 }
 
 void StateTransitionManager::applyThemeDefaults(const Theme& theme) {
     // Configure transitions based on theme settings
-    // Theme can be used to customize transition durations/colors in the future
-    (void)theme;  // Suppress unused parameter warning for now
+    // Theme influences transition behavior based on dark/light mode
+    bool isDarkMode = theme.isDarkMode();
 
-    // Hover state - slight opacity change
+    // Hover state - adjust based on theme
     StateTransitionConfig hoverConfig(100.0f, Easing::EaseOut);
-    hoverConfig.propertyDeltas[Property::Opacity] = 0.1f;
+    // In dark mode, hover brightens; in light mode, it can darken slightly
+    hoverConfig.propertyDeltas[Property::Opacity] = isDarkMode ? 0.1f : 0.05f;
     setTransition(WidgetStateType::Hovered, hoverConfig);
 
-    // Pressed state - quick response
+    // Pressed state - quick tactile feedback
     StateTransitionConfig pressedConfig(50.0f, Easing::EaseOut);
     pressedConfig.propertyDeltas[Property::Opacity] = -0.1f;
     pressedConfig.propertyDeltas[Property::Scale] = -0.02f;
     setTransition(WidgetStateType::Pressed, pressedConfig);
 
-    // Focused state
+    // Focused state - typically shown via border/ring, minimal property changes
     StateTransitionConfig focusedConfig(150.0f, Easing::EaseInOut);
     setTransition(WidgetStateType::Focused, focusedConfig);
 
-    // Disabled state - fade out
+    // Disabled state - more pronounced fade in dark mode for visibility
     StateTransitionConfig disabledConfig(200.0f, Easing::EaseOut);
-    disabledConfig.propertyDeltas[Property::Opacity] = -0.4f;
+    disabledConfig.propertyDeltas[Property::Opacity] = isDarkMode ? -0.5f : -0.4f;
     setTransition(WidgetStateType::Disabled, disabledConfig);
+    
+    // Normal state - base configuration
+    StateTransitionConfig normalConfig(150.0f, Easing::EaseOut);
+    setTransition(WidgetStateType::Normal, normalConfig);
 }
 
 // ============================================================================

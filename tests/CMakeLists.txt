@@ -148,6 +148,19 @@ endif()
 # Property-based tests (separate target for clarity)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/properties/test_properties.cpp")
     add_kgk_test(test_properties properties/test_properties.cpp)
+    # Link KGK2D for sprite transformation property tests
+    # Link KGK3D for scene graph transformation property tests
+    target_link_libraries(test_properties PRIVATE KGK2D KGK3D)
+endif()
+
+# Resource caching property tests (separate to avoid header conflicts)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resources/test_resource_caching.cpp")
+    add_kgk_test(test_resource_caching resources/test_resource_caching.cpp)
+endif()
+
+# CLI property tests
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cli/test_cli_properties.cpp")
+    add_kgk_test(test_cli_properties cli/test_cli_properties.cpp)
 endif()
 
 # =============================================================================

@@ -16,6 +16,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # =============================================================================
 option(KGK_BUILD_TESTS "Build tests" ON)
 option(KGK_BUILD_EXAMPLES "Build examples" ON)
+option(KGK_BUILD_TOOLS "Build CLI tools" ON)
 option(KGK_BUILD_DOCS "Build documentation" OFF)
 option(KGK_BUILD_SHARED "Build shared library instead of static" OFF)
 option(KGK_ENABLE_ASSIMP "Enable Assimp for 3D model loading" ON)
@@ -143,6 +144,8 @@ file(GLOB_RECURSE KGK_WIDGETS_SOURCES "src/widgets/*.cpp")
 file(GLOB_RECURSE KGK_LAYOUT_SOURCES "src/layout/*.cpp")
 file(GLOB_RECURSE KGK_ANIMATION_SOURCES "src/animation/*.cpp")
 file(GLOB_RECURSE KGK_THEME_SOURCES "src/theme/*.cpp")
+file(GLOB_RECURSE KGK_TEXT_SOURCES "src/text/*.cpp")
+file(GLOB_RECURSE KGK_RESOURCES_SOURCES "src/resources/*.cpp")
 file(GLOB_RECURSE KGK_2D_SOURCES "src/kgk2d/*.cpp")
 file(GLOB_RECURSE KGK_3D_SOURCES "src/kgk3d/*.cpp")
 file(GLOB_RECURSE KGK_AUDIO_SOURCES "src/kgkaudio/*.cpp")
@@ -169,6 +172,8 @@ add_library(KillerGK ${KGK_LIBRARY_TYPE}
     ${KGK_LAYOUT_SOURCES}
     ${KGK_ANIMATION_SOURCES}
     ${KGK_THEME_SOURCES}
+    ${KGK_TEXT_SOURCES}
+    ${KGK_RESOURCES_SOURCES}
 )
 
 # Set library properties
@@ -196,6 +201,17 @@ target_link_libraries(KillerGK PUBLIC
 if(Freetype_FOUND)
     target_link_libraries(KillerGK PUBLIC Freetype::Freetype)
     target_compile_definitions(KillerGK PUBLIC KGK_HAS_FREETYPE)
+endif()
+
+# Platform-specific libraries for OS integration
+if(WIN32)
+    target_link_libraries(KillerGK PRIVATE
+        dwmapi
+        shcore
+        shell32
+        ole32
+        dxgi
+    )
 endif()
 
 # =============================================================================
@@ -374,6 +390,13 @@ if(KGK_BUILD_EXAMPLES)
 endif()
 
 # =============================================================================
+# CLI Tools
+# =============================================================================
+if(KGK_BUILD_TOOLS)
+    add_subdirectory(tools/kgk-cli)
+endif()
+
+# =============================================================================
 # Installation Configuration
 # =============================================================================
 include(GNUInstallDirs)
@@ -473,5 +496,6 @@ message(STATUS "")
 message(STATUS "Build Options:")
 message(STATUS "  Build Tests:    ${KGK_BUILD_TESTS}")
 message(STATUS "  Build Examples: ${KGK_BUILD_EXAMPLES}")
+message(STATUS "  Build Tools:    ${KGK_BUILD_TOOLS}")
 message(STATUS "  Build Docs:     ${KGK_BUILD_DOCS}")
 message(STATUS "")

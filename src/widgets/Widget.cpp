@@ -246,6 +246,21 @@ Widget& Widget::shadow(float blur, float offsetX, float offsetY, const Color& co
     return *this;
 }
 
+Widget& Widget::shadow(float blur, float offsetX, float offsetY, const Color& color, float spread) {
+    m_data->shadow = Shadow(blur, offsetX, offsetY, color, spread);
+    return *this;
+}
+
+Widget& Widget::shadow(const Shadow& shadowConfig) {
+    m_data->shadow = shadowConfig;
+    return *this;
+}
+
+Widget& Widget::shadowEnabled(bool enabled) {
+    m_data->shadow.enabled = enabled;
+    return *this;
+}
+
 Widget& Widget::opacity(float value) {
     m_data->opacity = value;
     return *this;

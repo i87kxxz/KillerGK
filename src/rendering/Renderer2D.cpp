@@ -6,6 +6,7 @@
 #include "KillerGK/rendering/Renderer2D.hpp"
 #include "KillerGK/rendering/VulkanBackend.hpp"
 #include "KillerGK/rendering/ShaderSystem.hpp"
+#include "KillerGK/rendering/Texture.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <cstring>
@@ -542,6 +543,44 @@ void Renderer2D::drawCircleOutline(float cx, float cy, float radius, const Color
         
         drawLine(x1, y1, x2, y2, color, thickness);
     }
+}
+
+void Renderer2D::drawTexturedRect(const Rect& dstRect, std::shared_ptr<Texture> texture,
+                                   const Rect& srcRect, const Color& tint) {
+    if (!texture) return;
+    
+    // Calculate normalized texture coordinates
+    float texWidth = static_cast<float>(texture->getWidth());
+    float texHeight = static_cast<float>(texture->getHeight());
+    
+    float u0 = srcRect.x / texWidth;
+    float v0 = srcRect.y / texHeight;
+    float u1 = (srcRect.x + srcRect.width) / texWidth;
+    float v1 = (srcRect.y + srcRect.height) / texHeight;
+    
+    uint32_t baseIndex = m_impl->vertexCount;
+    
+    // Add 4 vertices with texture coordinates
+    addVertex(dstRect.x, dstRect.y, tint, u0, v0);
+    addVertex(dstRect.x + dstRect.width, dstRect.y, tint, u1, v0);
+    addVertex(dstRect.x + dstRect.width, dstRect.y + dstRect.height, tint, u1, v1);
+    addVertex(dstRect.x, dstRect.y + dstRect.height, tint, u0, v1);
+    
+    // Add 2 triangles
+    addTriangleIndices(baseIndex, baseIndex + 1, baseIndex + 2);
+    addTriangleIndices(baseIndex, baseIndex + 2, baseIndex + 3);
+    
+    // Note: In a full implementation, we would bind the texture here
+    // For now, this sets up the geometry with texture coordinates
+}
+
+void Renderer2D::drawTexturedRect(const Rect& dstRect, std::shared_ptr<Texture> texture,
+                                   const Color& tint) {
+    if (!texture) return;
+    
+    Rect srcRect(0, 0, static_cast<float>(texture->getWidth()), 
+                 static_cast<float>(texture->getHeight()));
+    drawTexturedRect(dstRect, texture, srcRect, tint);
 }
 
 Renderer2D::Stats Renderer2D::getStats() const {

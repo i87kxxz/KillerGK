@@ -179,6 +179,25 @@ public:
                            float thickness = 1.0f, int segments = 32);
     
     /**
+     * @brief Draw a textured rectangle
+     * @param dstRect Destination rectangle
+     * @param texture Texture to draw
+     * @param srcRect Source rectangle in texture (pixels)
+     * @param tint Color tint (default: white)
+     */
+    void drawTexturedRect(const Rect& dstRect, std::shared_ptr<class Texture> texture,
+                          const Rect& srcRect, const Color& tint = Color::White);
+    
+    /**
+     * @brief Draw a textured rectangle (full texture)
+     * @param dstRect Destination rectangle
+     * @param texture Texture to draw
+     * @param tint Color tint (default: white)
+     */
+    void drawTexturedRect(const Rect& dstRect, std::shared_ptr<class Texture> texture,
+                          const Color& tint = Color::White);
+    
+    /**
      * @brief Get statistics for the current frame
      */
     struct Stats {

@@ -37,6 +37,18 @@
 #include "rendering/Renderer.hpp"
 #include "rendering/Texture.hpp"
 #include "rendering/TextureAtlas.hpp"
+#include "rendering/VisualEffects.hpp"
+
+// Text system
+#include "text/Font.hpp"
+#include "text/TextRenderer.hpp"
+#include "text/BiDi.hpp"
+#include "text/RichText.hpp"
+#include "text/SyntaxHighlighter.hpp"
+#include "text/IconFont.hpp"
+
+// Resource management
+#include "resources/ResourceManager.hpp"
 
 /**
  * @namespace KGK

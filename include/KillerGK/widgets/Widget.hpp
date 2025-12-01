@@ -55,18 +55,51 @@ struct Spacing {
 /**
  * @struct Shadow
  * @brief Shadow effect configuration
+ * 
+ * Supports configurable blur radius, offset, color, and spread.
+ * Used by widgets to render drop shadows behind their bounds.
  */
 struct Shadow {
-    float blur = 0.0f;
-    float offsetX = 0.0f;
-    float offsetY = 0.0f;
-    Color color;
+    float blur = 0.0f;      ///< Shadow blur radius (0 = sharp, higher = softer)
+    float offsetX = 0.0f;   ///< Horizontal offset from widget
+    float offsetY = 0.0f;   ///< Vertical offset from widget
+    Color color;            ///< Shadow color with alpha for transparency
+    float spread = 0.0f;    ///< Shadow spread (positive = expand, negative = contract)
+    bool enabled = false;   ///< Whether shadow is enabled
 
     constexpr Shadow() = default;
+    
+    /**
+     * @brief Construct shadow with basic parameters
+     * @param b Blur radius
+     * @param ox Horizontal offset
+     * @param oy Vertical offset
+     * @param c Shadow color
+     */
     constexpr Shadow(float b, float ox, float oy, const Color& c)
-        : blur(b), offsetX(ox), offsetY(oy), color(c) {}
+        : blur(b), offsetX(ox), offsetY(oy), color(c), spread(0.0f), enabled(true) {}
+    
+    /**
+     * @brief Construct shadow with all parameters
+     * @param b Blur radius
+     * @param ox Horizontal offset
+     * @param oy Vertical offset
+     * @param c Shadow color
+     * @param s Spread value
+     */
+    constexpr Shadow(float b, float ox, float oy, const Color& c, float s)
+        : blur(b), offsetX(ox), offsetY(oy), color(c), spread(s), enabled(true) {}
 
     bool operator==(const Shadow& other) const = default;
+    
+    /**
+     * @brief Check if shadow has any visible effect
+     * @return true if shadow would be visible when rendered
+     */
+    [[nodiscard]] constexpr bool isVisible() const {
+        return enabled && color.a > 0.0f && (blur > 0.0f || spread > 0.0f || 
+               offsetX != 0.0f || offsetY != 0.0f);
+    }
 };
 
 
@@ -251,7 +284,42 @@ public:
     Widget& borderRadius(float radius);
     Widget& borderWidth(float width);
     Widget& borderColor(const Color& color);
+    
+    /**
+     * @brief Set shadow effect with basic parameters
+     * @param blur Shadow blur radius
+     * @param offsetX Horizontal offset
+     * @param offsetY Vertical offset
+     * @param color Shadow color with alpha
+     * @return Reference to this widget for chaining
+     */
     Widget& shadow(float blur, float offsetX, float offsetY, const Color& color);
+    
+    /**
+     * @brief Set shadow effect with spread parameter
+     * @param blur Shadow blur radius
+     * @param offsetX Horizontal offset
+     * @param offsetY Vertical offset
+     * @param color Shadow color with alpha
+     * @param spread Shadow spread (positive = expand, negative = contract)
+     * @return Reference to this widget for chaining
+     */
+    Widget& shadow(float blur, float offsetX, float offsetY, const Color& color, float spread);
+    
+    /**
+     * @brief Set shadow effect from Shadow struct
+     * @param shadowConfig Complete shadow configuration
+     * @return Reference to this widget for chaining
+     */
+    Widget& shadow(const Shadow& shadowConfig);
+    
+    /**
+     * @brief Enable or disable shadow
+     * @param enabled Whether shadow should be rendered
+     * @return Reference to this widget for chaining
+     */
+    Widget& shadowEnabled(bool enabled);
+    
     Widget& opacity(float value);
     Widget& blur(float radius);
 
